@@ -214,81 +214,46 @@ export const createBlog = asyncHandler(async (req, res) => {
 */
 
 export const updateBlog = asyncHandler(async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
+  const id = String(req.params.id || "").trim();
 
-  if (!blog) {
-    throw httpError(404, "Blog not found");
+  if (!mongoose.isValidObjectId(id)) {
+    throw httpError(400, "Invalid blog ID.");
   }
 
-  /*
-      |--------------------------------------------------------------------------
-      | TITLE
-      |--------------------------------------------------------------------------
-      */
+  const blog = await Blog.findById(id);
 
-  if (req.body.title !== undefined) {
-    const title = String(req.body.title || "").trim();
+  if (!blog) {
+    throw httpError(404, "Blog not found.");
+  }
 
-    if (!title) {
-      throw httpError(400, "Blog title is required.");
-    }
+  const { title, status, thumbnail, post_detail } = req.body;
 
+  if (title !== undefined) {
     blog.title = title;
   }
 
-  /*
-      |--------------------------------------------------------------------------
-      | THUMBNAIL
-      |--------------------------------------------------------------------------
-      */
-
-  if (req.body.thumbnail !== undefined) {
-    blog.thumbnail = String(req.body.thumbnail || "").trim();
+  if (status !== undefined) {
+    blog.status = status;
   }
 
-  /*
-      |--------------------------------------------------------------------------
-      | CHILD POSTS
-      |--------------------------------------------------------------------------
-      */
-
-  if (req.body.post_detail !== undefined) {
-    const sections = normalizePostDetail(req.body.post_detail);
-
-    validatePostDetail(sections);
-
-    blog.post_detail = sections;
+  if (thumbnail !== undefined) {
+    blog.thumbnail = thumbnail;
   }
 
-  /*
-      |--------------------------------------------------------------------------
-      | STATUS
-      |--------------------------------------------------------------------------
-      */
-
-  if (req.body.status !== undefined) {
-    if (!["ACTIVE", "INACTIVE"].includes(req.body.status)) {
-      throw httpError(400, "Invalid blog status.");
-    }
-
-    blog.status = req.body.status;
+  if (post_detail !== undefined) {
+    blog.post_detail = post_detail;
   }
 
-  /*
-      |--------------------------------------------------------------------------
-      | AUDIT
-      |--------------------------------------------------------------------------
-      */
+  if (req.user?._id) {
+    blog.updated_by = req.user._id;
+  }
 
-  blog.updated_by = req.user?._id || blog.updated_by;
+  blog.updated_at = new Date();
 
   await blog.save();
 
   return res.json({
-    success: true,
-
     message: "Blog updated successfully.",
-
     blog,
   });
 });
