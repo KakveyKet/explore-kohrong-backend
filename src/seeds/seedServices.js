@@ -2,6 +2,8 @@ import "dotenv/config";
 
 import mongoose from "mongoose";
 
+import Category from "../models/Category.js";
+import Service from "../models/Service.js";
 import User from "../models/User.js";
 
 /*
@@ -14,13 +16,12 @@ const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
 
 if (!MONGODB_URI) {
   console.error("❌ MONGODB_URI or MONGO_URI is missing from .env");
-
   process.exit(1);
 }
 
 /*
 |--------------------------------------------------------------------------
-| SLUG
+| HELPERS
 |--------------------------------------------------------------------------
 */
 
@@ -35,398 +36,174 @@ function makeSlug(value) {
 
 /*
 |--------------------------------------------------------------------------
-| UNIQUE SLUG
+| REMOVE OLD SERVICE SLUG INDEX
 |--------------------------------------------------------------------------
+|
+| Your current Service model does not use slug.
+| This prevents an old services.slug_1 unique index from causing problems.
+|
 */
 
-async function getUniqueSlug(collection, title, excludeId = null) {
-  const baseSlug = makeSlug(title) || `blog-${Date.now()}`;
+async function dropOldSlugIndex() {
+  try {
+    const indexes = await Service.collection.indexes();
 
-  let slug = baseSlug;
+    const slugIndex = indexes.find(
+      (index) =>
+        index.name === "slug_1" ||
+        Object.prototype.hasOwnProperty.call(index.key || {}, "slug"),
+    );
 
-  let counter = 2;
-
-  while (true) {
-    const query = {
-      slug,
-    };
-
-    if (excludeId) {
-      query._id = {
-        $ne: excludeId,
-      };
+    if (!slugIndex) {
+      console.log("ℹ️ No old service slug index found.");
+      return;
     }
 
-    const exists = await collection.findOne(query, {
-      projection: {
-        _id: 1,
-      },
-    });
+    await Service.collection.dropIndex(slugIndex.name);
 
-    if (!exists) {
-      return slug;
+    console.log(`🗑️ Removed old service index: ${slugIndex.name}`);
+  } catch (error) {
+    if (
+      error?.codeName === "IndexNotFound" ||
+      String(error?.message || "").includes("index not found")
+    ) {
+      return;
     }
 
-    slug = `${baseSlug}-${counter}`;
-
-    counter += 1;
+    throw error;
   }
 }
 
 /*
 |--------------------------------------------------------------------------
-| REPAIR OLD NULL SLUGS
+| CATEGORY
 |--------------------------------------------------------------------------
-|
-| Your collection currently has:
-|
-| slug_1 unique index
-|
-| and at least one record has:
-|
-| slug: null
-|
-| We repair old records first.
-|
 */
 
-async function repairOldBlogSlugs(collection) {
-  const oldBlogs = await collection
-    .find({
-      $or: [
-        {
-          slug: null,
-        },
-        {
-          slug: "",
-        },
-        {
-          slug: {
-            $exists: false,
-          },
-        },
-      ],
-    })
-    .toArray();
+async function getOrCreateCategory(name, slug, adminId) {
+  let category = await Category.findOne({
+    $or: [{ name }, { slug }],
+  });
 
-  if (!oldBlogs.length) {
-    console.log("✅ No old blogs with missing slug");
+  if (category) {
+    /*
+     * Keep category active.
+     */
+    category.name = name;
+    category.slug = slug;
+    category.status = "ACTIVE";
+    category.updated_at = new Date();
+
+    if (adminId) {
+      category.updated_by = adminId;
+    }
+
+    await category.save();
+
+    return category;
+  }
+
+  const payload = {
+    name,
+    slug: slug || makeSlug(name),
+    status: "ACTIVE",
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+
+  if (adminId) {
+    payload.created_by = adminId;
+    payload.updated_by = adminId;
+  }
+
+  category = await Category.create(payload);
+
+  console.log(`✅ Category created: ${name}`);
+
+  return category;
+}
+
+/*
+|--------------------------------------------------------------------------
+| SERVICE UPSERT
+|--------------------------------------------------------------------------
+*/
+
+async function createOrUpdateService(serviceData, adminId) {
+  const existing = await Service.findOne({
+    name: serviceData.name,
+  });
+
+  const payload = {
+    cate_id: serviceData.cate_id,
+
+    name: serviceData.name,
+
+    price: serviceData.price,
+
+    description: serviceData.description,
+
+    thumbnail: serviceData.thumbnail || "",
+
+    images: Array.isArray(serviceData.images) ? serviceData.images : [],
+
+    status: "ACTIVE",
+
+    updated_at: new Date(),
+  };
+
+  if (adminId) {
+    payload.updated_by = adminId;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | UPDATE
+  |--------------------------------------------------------------------------
+  */
+
+  if (existing) {
+    await Service.updateOne(
+      {
+        _id: existing._id,
+      },
+      {
+        $set: payload,
+      },
+      {
+        runValidators: true,
+      },
+    );
+
+    console.log(`🔄 Updated: ${serviceData.name}`);
 
     return;
   }
 
-  console.log(`🔧 Found ${oldBlogs.length} old blog(s) without slug`);
+  /*
+  |--------------------------------------------------------------------------
+  | CREATE
+  |--------------------------------------------------------------------------
+  */
 
-  for (const blog of oldBlogs) {
-    const slug = await getUniqueSlug(
-      collection,
-      blog.title || `blog-${blog._id}`,
-      blog._id,
-    );
+  payload.created_at = new Date();
 
-    await collection.updateOne(
-      {
-        _id: blog._id,
-      },
-      {
-        $set: {
-          slug,
-
-          updated_at: new Date(),
-        },
-      },
-    );
-
-    console.log(`🔧 Repaired: ${blog.title || blog._id} -> ${slug}`);
+  if (adminId) {
+    payload.created_by = adminId;
   }
+
+  await Service.create(payload);
+
+  console.log(`✅ Created: ${serviceData.name}`);
 }
 
 /*
 |--------------------------------------------------------------------------
-| TEST BLOG DATA
+| SEED
 |--------------------------------------------------------------------------
 */
 
-const blogSeedData = [
-  {
-    title: "10 Best Things to Do in Koh Rong",
-
-    slug: "10-best-things-to-do-in-koh-rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Discover some of the best activities and experiences to enjoy while visiting Koh Rong.",
-
-    post_detail: [
-      {
-        sub_title: "Discover the Best Activities and Experiences on Koh Rong",
-
-        text: "Koh Rong is one of Cambodia's beautiful island destinations. Visitors can relax on tropical beaches, join boat tours, try snorkeling, explore local villages, enjoy local food, discover quiet coastal areas and watch beautiful sunsets. Whether you want adventure or relaxation, Koh Rong offers activities for many different types of travelers.",
-
-        images: [
-          "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "A Complete Guide to Koh Rong Beaches",
-
-    slug: "complete-guide-to-koh-rong-beaches",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1510414842594-a61c69b5ae57?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Explore beautiful beaches around Koh Rong, from lively areas to peaceful tropical escapes.",
-
-    post_detail: [
-      {
-        sub_title: "Explore Beautiful Beaches Around the Island",
-
-        text: "Koh Rong has many beautiful beaches with different atmospheres. Some areas are close to restaurants, guesthouses and activities, while others offer a quieter island experience. Travelers can spend their time swimming, relaxing, taking photos, enjoying beach food or watching the sunset.",
-
-        images: [
-          "https://images.unsplash.com/photo-1510414842594-a61c69b5ae57?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1500375592092-40eb2168fd21?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "Koh Rong Snorkeling Guide for Beginners",
-
-    slug: "koh-rong-snorkeling-guide-for-beginners",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "A beginner-friendly guide to enjoying snorkeling around Koh Rong.",
-
-    post_detail: [
-      {
-        sub_title:
-          "Everything You Need to Know Before Your First Snorkeling Trip",
-
-        text: "Snorkeling is one of the popular activities around Koh Rong. Beginners can join guided trips that visit suitable coastal locations. Bring comfortable swimwear, sunscreen, drinking water and a towel. A guided tour can also provide useful information about the snorkeling location and equipment.",
-
-        images: [
-          "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1551244072-5d12893278ab?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "Why You Should Take a Sunset Boat Tour",
-
-    slug: "why-you-should-take-a-sunset-boat-tour",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Experience Koh Rong from the water and enjoy a relaxing island sunset.",
-
-    post_detail: [
-      {
-        sub_title: "Experience a Relaxing Evening on the Water",
-
-        text: "A sunset boat tour is a relaxing way to see Koh Rong from another perspective. Travelers can enjoy views of the coastline, spend time on the water and finish the day watching the colors of the tropical sunset. Sunset trips are suitable for friends, families and couples.",
-
-        images: [
-          "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1499403474843-04e72c14df8a?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "How to Get Around Koh Rong",
-
-    slug: "how-to-get-around-koh-rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Learn about walking, scooters, tuk tuks and boat transportation around Koh Rong.",
-
-    post_detail: [
-      {
-        sub_title: "A Simple Guide to Island Transportation",
-
-        text: "Getting around Koh Rong depends on where you stay and which places you want to visit. Walking is useful around nearby villages and beaches. Scooters can provide more flexibility in accessible areas. Tuk tuks are convenient for traveling with luggage, while some coastal locations may be easier to reach by boat.",
-
-        images: [
-          "https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1524591652733-73fa1ae7b5ee?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "What to Pack for Your Koh Rong Trip",
-
-    slug: "what-to-pack-for-your-koh-rong-trip",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Prepare useful items for beaches, boat trips and island activities.",
-
-    post_detail: [
-      {
-        sub_title: "Essential Items for a Comfortable Island Holiday",
-
-        text: "Traveling around an island is easier when you pack light. Useful items include swimwear, lightweight clothing, sunscreen, sunglasses, a hat, comfortable footwear, a reusable water bottle, a dry bag and a portable charger. Bringing only what you need also makes boat and tuk tuk travel easier.",
-
-        images: [
-          "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "A Local Village Experience on Koh Rong",
-
-    slug: "local-village-experience-on-koh-rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1552465011-b4e21bf6e79a?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Discover local communities and everyday island life beyond the beaches.",
-
-    post_detail: [
-      {
-        sub_title: "Discover Local Culture and Everyday Island Life",
-
-        text: "Koh Rong is more than beaches and resorts. Local communities live and work on the island throughout the year. Visiting a village can help travelers learn more about island life, local traditions and businesses. Visitors should always respect homes, community spaces and religious locations.",
-
-        images: [
-          "https://images.unsplash.com/photo-1552465011-b4e21bf6e79a?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1528181304800-259b08848526?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "Best Time to Visit Koh Rong",
-
-    slug: "best-time-to-visit-koh-rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Understand what weather and travel conditions to consider when planning a trip to Koh Rong.",
-
-    post_detail: [
-      {
-        sub_title: "Plan Your Island Holiday Around the Weather",
-
-        text: "Weather can affect beach activities, snorkeling, boat tours and transportation around Koh Rong. Clear days are especially good for spending time outdoors and exploring the coast. During periods of rain, travelers can keep their plans flexible and check local conditions before booking activities.",
-
-        images: [
-          "https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "Koh Rong Travel Tips for First-Time Visitors",
-
-    slug: "koh-rong-travel-tips-for-first-time-visitors",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1526772662000-3f88f10405ff?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Useful advice for transportation, bookings and your first visit to Koh Rong.",
-
-    post_detail: [
-      {
-        sub_title: "Useful Advice for Your First Trip to the Island",
-
-        text: "First-time visitors should confirm their ferry departure, destination pier and accommodation location before traveling. Keeping some cash can be useful for smaller businesses and transportation services. During busy periods, booking popular tours and activities ahead of time can also make the trip easier.",
-
-        images: [
-          "https://images.unsplash.com/photo-1526772662000-3f88f10405ff?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-
-  {
-    title: "Plan the Perfect 3-Day Koh Rong Itinerary",
-
-    slug: "perfect-3-day-koh-rong-itinerary",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "A simple three-day plan combining beaches, tours and local island experiences.",
-
-    post_detail: [
-      {
-        sub_title: "A Simple Three-Day Plan for Exploring Koh Rong",
-
-        text: "On day one, arrive on Koh Rong, check into your accommodation and enjoy the beach. On day two, join a boat or snorkeling activity and finish the afternoon with a sunset experience. On day three, explore another part of the island, visit a village, use a tuk tuk or spend more time relaxing before departure.",
-
-        images: [
-          "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-          "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
-        ],
-
-        video_url: "",
-      },
-    ],
-  },
-];
-
-/*
-|--------------------------------------------------------------------------
-| SEED BLOGS
-|--------------------------------------------------------------------------
-*/
-
-async function seedBlogs() {
+async function seedServices() {
   try {
     /*
     |--------------------------------------------------------------------------
@@ -442,48 +219,11 @@ async function seedBlogs() {
 
     /*
     |--------------------------------------------------------------------------
-    | RAW BLOG COLLECTION
-    |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    |
-    | We intentionally do NOT use:
-    |
-    | Blog.create(...)
-    |
-    | because your Mongoose Blog schema
-    | is removing slug.
-    |
-    */
-
-    const collection = mongoose.connection.collection("blogs");
-
-    /*
-    |--------------------------------------------------------------------------
-    | CHECK INDEX
+    | CLEAN OLD INDEX
     |--------------------------------------------------------------------------
     */
 
-    const indexes = await collection.indexes();
-
-    console.log(
-      "📋 Blog indexes:",
-      indexes.map((index) => index.name),
-    );
-
-    const slugIndex = indexes.find((index) => index.name === "slug_1");
-
-    if (slugIndex) {
-      console.log("✅ slug_1 index exists - seed will use real slug values");
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | REPAIR EXISTING NULL SLUG
-    |--------------------------------------------------------------------------
-    */
-
-    await repairOldBlogSlugs(collection);
+    await dropOldSlugIndex();
 
     /*
     |--------------------------------------------------------------------------
@@ -502,187 +242,360 @@ async function seedBlogs() {
     if (adminId) {
       console.log(`✅ Admin found: ${adminId}`);
     } else {
-      console.log("⚠️ No admin found - continuing without admin ID");
+      console.log("⚠️ No admin found. Services will still be seeded.");
     }
 
     /*
     |--------------------------------------------------------------------------
-    | COUNTERS
+    | CATEGORIES
     |--------------------------------------------------------------------------
     */
 
-    let created = 0;
+    const toursCategory = await getOrCreateCategory("Tours", "tours", adminId);
 
-    let updated = 0;
+    const transportCategory = await getOrCreateCategory(
+      "Transport",
+      "transport",
+      adminId,
+    );
+
+    const rentalCategory = await getOrCreateCategory(
+      "Rental",
+      "rental",
+      adminId,
+    );
 
     /*
     |--------------------------------------------------------------------------
-    | INSERT / UPDATE
+    | SERVICE DATA
     |--------------------------------------------------------------------------
     */
 
-    for (const blog of blogSeedData) {
+    const services = [
       /*
       |--------------------------------------------------------------------------
-      | FIND EXISTING
+      | 1. TUK TUK & TRANSFER
       |--------------------------------------------------------------------------
       */
 
-      const existing = await collection.findOne({
-        $or: [
-          {
-            slug: blog.slug,
-          },
-          {
-            title: blog.title,
-          },
-        ],
-      });
+      {
+        cate_id: transportCategory._id,
 
-      const now = new Date();
+        name: "Explore Koh Rong Tuk Tuk & Transfer",
 
-      /*
-      |--------------------------------------------------------------------------
-      | DOCUMENT
-      |--------------------------------------------------------------------------
-      */
+        price: 7.5,
 
-      const document = {
-        title: blog.title,
+        description: `
+          <h3>Explore Koh Rong Tuk Tuk & Transfer Prices</h3>
 
-        /*
-         * Important:
-         *
-         * This slug is written directly
-         * to MongoDB.
-         */
+          <h4>One-Way Transfers</h4>
 
-        slug: blog.slug,
+          <ul>
+            <li>Pagoda ➝ Longset: <strong>$7.50</strong></li>
+            <li>Pagoda Beach ➝ Koh Touch: <strong>$15</strong></li>
+            <li>Pagoda Beach ➝ Palm Beach: <strong>$10</strong></li>
+            <li>Pagoda ➝ Preaek Svay: <strong>$15</strong></li>
+            <li>Pagoda ➝ Sok San: <strong>$10</strong></li>
+          </ul>
 
-        thumbnail: blog.thumbnail,
+          <h4>Tuk Tuk Tour – 3 to 4 People</h4>
 
-        excerpt: blog.excerpt,
+          <p>
+            <strong>Duration:</strong> 5 Hours
+          </p>
 
-        description: blog.excerpt,
+          <p>
+            <strong>Price:</strong> $45
+          </p>
 
-        status: "ACTIVE",
+          <h4>Includes</h4>
 
-        post_detail: blog.post_detail,
+          <ul>
+            <li>
+              Visit the <strong>Mangroves</strong>,
+              <strong>Palm Beach</strong>, and
+              <strong>Preaek Svay</strong>.
+            </li>
 
-        updated_at: now,
+            <li>
+              Stop by the <strong>Pagoda</strong> and
+              <strong>Floating Village</strong>.
+            </li>
 
-        ...(adminId
-          ? {
-              updated_by: adminId,
-            }
-          : {}),
-      };
+            <li>
+              Continue along the beautiful beaches to
+              <strong>Sok San</strong>.
+            </li>
 
-      /*
-      |--------------------------------------------------------------------------
-      | UPDATE
-      |--------------------------------------------------------------------------
-      */
+            <li>
+              Enjoy a walk along the <strong>beach and hills</strong>.
+            </li>
 
-      if (existing) {
-        /*
-         * Ensure slug remains unique.
-         */
+            <li>
+              Finish the tour at <strong>Koh Touch</strong>.
+            </li>
+          </ul>
+        `,
 
-        let slug = blog.slug;
+        thumbnail: "",
 
-        const slugOwner = await collection.findOne({
-          slug,
-
-          _id: {
-            $ne: existing._id,
-          },
-        });
-
-        if (slugOwner) {
-          slug = await getUniqueSlug(collection, blog.title, existing._id);
-        }
-
-        await collection.updateOne(
-          {
-            _id: existing._id,
-          },
-          {
-            $set: {
-              ...document,
-
-              slug,
-            },
-          },
-        );
-
-        updated += 1;
-
-        console.log(`🔄 Updated: ${blog.title}`);
-
-        continue;
-      }
+        images: [],
+      },
 
       /*
       |--------------------------------------------------------------------------
-      | CREATE
+      | 2. PRIVATE BOAT
       |--------------------------------------------------------------------------
       */
 
-      let slug = blog.slug;
+      {
+        cate_id: toursCategory._id,
 
-      const slugAlreadyExists = await collection.findOne({
-        slug,
-      });
+        name: "Private Boat Trip",
 
-      if (slugAlreadyExists) {
-        slug = await getUniqueSlug(collection, blog.title);
-      }
+        price: 85,
 
-      await collection.insertOne({
-        ...document,
+        description: `
+          <h3>Private Boat Trip</h3>
 
-        slug,
+          <p>
+            Enjoy a private boat trip around Koh Rong for
+            <strong>4 to 6 people</strong>.
+          </p>
 
-        created_at: now,
+          <p>
+            The private boat trip costs <strong>$85</strong>.
+          </p>
 
-        ...(adminId
-          ? {
-              created_by: adminId,
-            }
-          : {}),
-      });
+          <h4>Includes</h4>
 
-      created += 1;
+          <ul>
+            <li>Two snorkeling spots</li>
+            <li>Fishing</li>
+            <li>Drinking water</li>
+          </ul>
 
-      console.log(`✅ Created: ${blog.title}`);
+          <p>
+            A great option for families, friends, or small groups who want
+            to explore the island by private boat.
+          </p>
+        `,
+
+        thumbnail: "",
+
+        images: [],
+      },
+
+      /*
+      |--------------------------------------------------------------------------
+      | 3. SHARING BOAT
+      |--------------------------------------------------------------------------
+      */
+
+      {
+        cate_id: toursCategory._id,
+
+        name: "Sharing Boat Trip",
+
+        price: 25,
+
+        description: `
+          <h3>Sharing Boat Trip</h3>
+
+          <p>
+            Join our sharing boat trip for
+            <strong>$25 per person</strong>.
+          </p>
+
+          <h4>Includes</h4>
+
+          <ul>
+            <li>Two snorkeling spots</li>
+            <li>Lunch</li>
+            <li>Soft drinks</li>
+            <li>Fresh fruits</li>
+            <li>Tea</li>
+            <li>Coffee</li>
+          </ul>
+
+          <p>
+            Enjoy a relaxing day on the water while discovering beautiful
+            snorkeling locations around Koh Rong.
+          </p>
+        `,
+
+        thumbnail: "",
+
+        images: [],
+      },
+
+      /*
+      |--------------------------------------------------------------------------
+      | 4. SCOOTER RENTAL
+      |--------------------------------------------------------------------------
+      */
+
+      {
+        cate_id: rentalCategory._id,
+
+        name: "Scooter Rental",
+
+        price: 13,
+
+        description: `
+          <h3>Scooter Rental – $13</h3>
+
+          <p>
+            Rent a scooter for <strong>$13</strong>.
+          </p>
+
+          <p>
+            <strong>Helmet and fuel are included.</strong>
+          </p>
+
+          <p>
+            The scooter is for two people only. Please always ride on the
+            right side of the road.
+          </p>
+
+          <p>
+            No driving license is required, but you must be confident when
+            riding.
+          </p>
+
+          <p>
+            We are not responsible for any damage or injury. Guests are
+            responsible for any incident or damage that happens to the
+            scooter.
+          </p>
+        `,
+
+        thumbnail: "",
+
+        images: [],
+      },
+
+      /*
+      |--------------------------------------------------------------------------
+      | 5. BIKE RENTAL
+      |--------------------------------------------------------------------------
+      */
+
+      {
+        cate_id: rentalCategory._id,
+
+        name: "Bike Rental",
+
+        price: 7,
+
+        description: `
+          <h3>Bike Rental – $7 Per Day</h3>
+
+          <p>
+            You can rent a bike for <strong>$7 per day</strong> to explore
+            Koh Rong at your own pace.
+          </p>
+
+          <p>
+            Helmets are available if you need one.
+          </p>
+
+          <p>
+            Please take care of the bike and return it in the same condition.
+            Any damage or loss will be your responsibility.
+          </p>
+
+          <p>
+            Always ride safely and keep on the right side of the road.
+            No license is required.
+          </p>
+
+          <p>
+            Enjoy your ride around the island.
+          </p>
+        `,
+
+        thumbnail: "",
+
+        images: [],
+      },
+
+      /*
+      |--------------------------------------------------------------------------
+      | 6. PAGODA LOCAL GUIDE
+      |--------------------------------------------------------------------------
+      */
+
+      {
+        cate_id: toursCategory._id,
+
+        name: "Visit Pagoda with a Local Guide",
+
+        price: 2.5,
+
+        description: `
+          <h3>Visit Pagoda with a Local Guide</h3>
+
+          <p>
+            Join our local tour to visit a beautiful pagoda near
+            <strong>Pagoda Beach</strong>.
+          </p>
+
+          <p>
+            The pagoda represents both <strong>Hinduism</strong> and
+            <strong>Buddhism</strong>. During the tour, you will learn how
+            these two religions have blended together in Cambodian culture
+            and why this special pagoda gave Pagoda Beach its name.
+          </p>
+
+          <p>
+            If you visit Pagoda Beach, don't miss this unique opportunity.
+            <strong>Explore Koh Rong</strong> will guide you.
+          </p>
+
+          <h4>Price</h4>
+
+          <p>
+            <strong>$2.50 per person</strong>
+          </p>
+
+          <h4>Tour Schedule</h4>
+
+          <ul>
+            <li>9:00 AM – 11:00 AM</li>
+            <li>11:00 AM – 1:00 PM</li>
+          </ul>
+
+          <h4>Group Size</h4>
+
+          <p>
+            Maximum <strong>6 people per tour</strong>.
+          </p>
+
+          <p>
+            Please feel free to contact us for more information.
+          </p>
+        `,
+
+        thumbnail: "",
+
+        images: [],
+      },
+    ];
+
+    /*
+    |--------------------------------------------------------------------------
+    | CREATE / UPDATE SERVICES
+    |--------------------------------------------------------------------------
+    */
+
+    console.log("");
+    console.log("🌴 Seeding Explore Koh Rong services...");
+    console.log("");
+
+    for (const service of services) {
+      await createOrUpdateService(service, adminId);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | VERIFY SEEDED DATA
-    |--------------------------------------------------------------------------
-    */
-
-    const seededSlugs = blogSeedData.map((blog) => blog.slug);
-
-    const seededBlogs = await collection
-      .find({
-        slug: {
-          $in: seededSlugs,
-        },
-      })
-      .project({
-        title: 1,
-        slug: 1,
-        status: 1,
-        thumbnail: 1,
-        post_detail: 1,
-      })
-      .sort({
-        title: 1,
-      })
-      .toArray();
 
     /*
     |--------------------------------------------------------------------------
@@ -691,64 +604,30 @@ async function seedBlogs() {
     */
 
     console.log("");
-    console.log("================================================");
+    console.log("==============================================");
+    console.log("🌴 Explore Koh Rong Service Seed Complete");
+    console.log("==============================================");
+    console.log("");
 
-    console.log("🌴 Explore Koh Rong Blog Seed Complete");
-
-    console.log(`✅ Created: ${created}`);
-
-    console.log(`🔄 Updated: ${updated}`);
-
-    console.log(`📝 Seeded blogs found: ${seededBlogs.length}`);
-
-    console.log("================================================");
-
-    /*
-    |--------------------------------------------------------------------------
-    | TEST OUTPUT
-    |--------------------------------------------------------------------------
-    */
-
-    for (const blog of seededBlogs) {
-      console.log(`✅ ${blog.title}`);
-
-      console.log(`   slug: ${blog.slug}`);
-
-      console.log(`   status: ${blog.status}`);
-
-      console.log(`   post_detail: ${blog.post_detail?.length || 0}`);
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | FINAL CHECK
-    |--------------------------------------------------------------------------
-    */
-
-    if (seededBlogs.length !== blogSeedData.length) {
-      console.warn(
-        `⚠️ Expected ${blogSeedData.length} blogs but found ${seededBlogs.length}`,
-      );
-    } else {
-      console.log("");
-      console.log("🎉 All 10 test blogs are ready");
-    }
+    console.log("Services:");
+    console.log("1. Explore Koh Rong Tuk Tuk & Transfer");
+    console.log("2. Private Boat Trip");
+    console.log("3. Sharing Boat Trip");
+    console.log("4. Scooter Rental");
+    console.log("5. Bike Rental");
+    console.log("6. Visit Pagoda with a Local Guide");
+    console.log("");
   } catch (error) {
     console.error("");
-    console.error("❌ BLOG SEED ERROR:", error);
-
-    if (error?.code === 11000) {
-      console.error("⚠️ Duplicate key:", error.keyValue);
-
-      console.error("⚠️ Index:", error.keyPattern);
-    }
+    console.error("❌ SERVICE SEED ERROR");
+    console.error(error);
+    console.error("");
 
     process.exitCode = 1;
   } finally {
     await mongoose.disconnect();
 
-    console.log("");
-    console.log("MongoDB disconnected");
+    console.log("🔌 MongoDB disconnected");
   }
 }
 
@@ -758,4 +637,4 @@ async function seedBlogs() {
 |--------------------------------------------------------------------------
 */
 
-seedBlogs();
+seedServices();
