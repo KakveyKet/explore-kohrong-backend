@@ -1,3 +1,5 @@
+// src/routes/blogRoutes.js
+
 import express from "express";
 
 import {
@@ -10,6 +12,12 @@ import {
 
 import { authenticate, allowRoles } from "../middleware/auth.js";
 
+/*
+|--------------------------------------------------------------------------
+| ROUTER
+|--------------------------------------------------------------------------
+*/
+
 const router = express.Router();
 
 /*
@@ -18,24 +26,41 @@ const router = express.Router();
 |--------------------------------------------------------------------------
 */
 
+/*
+ * List blogs.
+ *
+ * GET /api/blogs
+ * GET /api/blogs?all=true
+ */
+
 router.get("/", listBlogs);
+
+/*
+ * Blog detail.
+ *
+ * GET /api/blogs/:id
+ */
 
 router.get("/:id", getBlog);
 
 /*
 |--------------------------------------------------------------------------
-| ADMIN
+| CREATE
 |--------------------------------------------------------------------------
+|
+| SUPER_ADMIN
+| ADMIN
+|
 */
 
 router.post("/", authenticate, allowRoles("SUPER_ADMIN", "ADMIN"), createBlog);
 
 /*
 |--------------------------------------------------------------------------
-| UPDATE BLOG
+| UPDATE
 |--------------------------------------------------------------------------
 |
-| Frontend uses:
+| This route was missing before.
 |
 | PATCH /api/blogs/:id
 |
@@ -50,10 +75,10 @@ router.patch(
 
 /*
 |--------------------------------------------------------------------------
-| OPTIONAL PUT SUPPORT
+| PUT SUPPORT
 |--------------------------------------------------------------------------
 |
-| Keep this if older frontend code used PUT.
+| Keep this so older frontend code using PUT also works.
 |
 */
 
