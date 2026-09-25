@@ -1,14 +1,11 @@
+// src/seeds/seedBlogs.js
+
 import "dotenv/config";
 
 import mongoose from "mongoose";
 
-/*
-|--------------------------------------------------------------------------
-| IMPORTANT VERSION MARKER
-|--------------------------------------------------------------------------
-*/
-
-console.log("🚀 RAW BLOG SEED V3 STARTED");
+import Blog from "../models/Blog.js";
+import User from "../models/User.js";
 
 /*
 |--------------------------------------------------------------------------
@@ -26,6 +23,20 @@ if (!MONGODB_URI) {
 
 /*
 |--------------------------------------------------------------------------
+| SCHEMA HELPERS
+|--------------------------------------------------------------------------
+*/
+
+function hasPath(path) {
+  return Boolean(Blog.schema.path(path));
+}
+
+function getPath(path) {
+  return Blog.schema.path(path);
+}
+
+/*
+|--------------------------------------------------------------------------
 | SLUG
 |--------------------------------------------------------------------------
 */
@@ -35,210 +46,629 @@ function makeSlug(value) {
     .trim()
     .toLowerCase()
     .replace(/&/g, "and")
+    .replace(/[’']/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
 /*
 |--------------------------------------------------------------------------
-| TEST BLOG DATA
+| BLOG STATUS
+|--------------------------------------------------------------------------
+|
+| Supports your schema even if the status enum is:
+|
+| ACTIVE / INACTIVE
+|
+| or
+|
+| PUBLISHED / DRAFT
+|
+*/
+
+function getPublishedStatus() {
+  const statusPath = getPath("status");
+
+  const values = statusPath?.options?.enum || statusPath?.enumValues || [];
+
+  if (values.includes("ACTIVE")) {
+    return "ACTIVE";
+  }
+
+  if (values.includes("PUBLISHED")) {
+    return "PUBLISHED";
+  }
+
+  if (values.length) {
+    return values[0];
+  }
+
+  return "ACTIVE";
+}
+
+/*
+|--------------------------------------------------------------------------
+| COVER FIELD
+|--------------------------------------------------------------------------
+|
+| Supports:
+|
+| thumbnail
+| cover_image
+| cover
+| image
+|
+*/
+
+function getCoverField() {
+  const possibleFields = ["thumbnail", "cover_image", "cover", "image"];
+
+  return possibleFields.find((field) => hasPath(field)) || null;
+}
+
+/*
+|--------------------------------------------------------------------------
+| EXCERPT FIELD
+|--------------------------------------------------------------------------
+|
+| Supports:
+|
+| excerpt
+| description
+| summary
+|
+*/
+
+function getExcerptField() {
+  const possibleFields = ["excerpt", "description", "summary"];
+
+  return possibleFields.find((field) => hasPath(field)) || null;
+}
+
+/*
+|--------------------------------------------------------------------------
+| CLEAN HTML
 |--------------------------------------------------------------------------
 */
 
-const blogSeedData = [
+function cleanHtml(value) {
+  return String(value || "")
+    .replace(/\n\s+/g, "\n")
+    .trim();
+}
+
+/*
+|--------------------------------------------------------------------------
+| BLOG DATA
+|--------------------------------------------------------------------------
+*/
+
+const blogs = [
+  /*
+  |--------------------------------------------------------------------------
+  | BLOG 1
+  |--------------------------------------------------------------------------
+  */
+
   {
-    title: "10 Best Things to Do in Koh Rong",
-
-    sub_title: "Discover the Best Activities and Experiences on Koh Rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
+    title: "Discover Koh Rong’s Local Villages and Island Culture",
 
     excerpt:
-      "Discover beaches, snorkeling, boat trips, villages and unforgettable island experiences.",
+      "Explore Koh Rong beyond the beaches by discovering its fishing villages, mangrove communities, pagodas, and traditional island life.",
 
-    images: [
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-    ],
+    subTitle:
+      "Discover the communities, traditions, and local culture of Koh Rong.",
 
-    text: "Koh Rong is one of Cambodia's beautiful island destinations. Visitors can enjoy tropical beaches, boat trips, snorkeling, local villages and relaxing island experiences. Spend time on the beach, join a boat tour, explore marine life and enjoy a beautiful island sunset.",
+    content: `
+      <p>
+        Koh Rong, Cambodia’s tropical gem, offers much more than beautiful
+        beaches. The island is also home to vibrant local communities where
+        visitors can discover traditional island life, culture, and sustainable
+        practices.
+      </p>
+
+      <h2>Lottoek Trey Fishing Village</h2>
+
+      <p>
+        <strong>Lottoek Trey fishing village</strong> is one of Koh Rong’s
+        local communities where visitors can experience the traditional
+        lifestyle of people living on the island.
+      </p>
+
+      <p>
+        Fishing remains an important part of local life and gives travelers an
+        opportunity to discover another side of Koh Rong beyond its beaches
+        and tourism areas.
+      </p>
+
+      <h2>Prek Tasok Mangrove Community</h2>
+
+      <p>
+        <strong>Prek Tasok mangrove community</strong> showcases both local
+        community life and Koh Rong’s natural environment.
+      </p>
+
+      <p>
+        The mangrove area highlights the connection between local communities,
+        nature, and sustainable practices on the island.
+      </p>
+
+      <h2>Preak Svay Village</h2>
+
+      <p>
+        <strong>Preak Svay Village</strong> offers local charm, peaceful
+        surroundings, and serene pagodas.
+      </p>
+
+      <p>
+        Visiting Lottoek Trey, Prek Tasok, and Preak Svay gives travelers an
+        opportunity to better understand the culture, traditions, and daily
+        life of Koh Rong.
+      </p>
+
+      <p>
+        Koh Rong is not only a destination for beaches and adventure. Its
+        communities and local culture are also an important part of what makes
+        the island special.
+      </p>
+    `,
+
+    thumbnail: "",
+
+    images: [],
+
+    videoUrl: "",
   },
 
+  /*
+  |--------------------------------------------------------------------------
+  | BLOG 2
+  |--------------------------------------------------------------------------
+  */
+
   {
-    title: "A Complete Guide to Koh Rong Beaches",
-
-    sub_title: "Explore Beautiful Beaches Around the Island",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1510414842594-a61c69b5ae57?auto=format&fit=crop&w=1400&q=85",
+    title: "Beautiful Beaches and Natural Wonders of Koh Rong",
 
     excerpt:
-      "Explore lively beach areas and peaceful tropical escapes around Koh Rong.",
+      "Discover Koh Rong’s beautiful beaches, rainy-season waterfalls, fresh streams, and magical bioluminescent plankton.",
 
-    images: [
-      "https://images.unsplash.com/photo-1510414842594-a61c69b5ae57?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1500375592092-40eb2168fd21?auto=format&fit=crop&w=1400&q=85",
-    ],
+    subTitle:
+      "Explore the beaches and natural beauty that make Koh Rong special.",
 
-    text: "Koh Rong has many beautiful beaches with different atmospheres. Some are close to restaurants and accommodation, while others provide a quieter tropical island experience. Visitors can enjoy swimming, relaxing, photography and sunset views.",
+    content: `
+      <p>
+        Koh Rong is one of Cambodia’s tropical gems, surrounded by beautiful
+        beaches, lush jungle, and stunning natural scenery.
+      </p>
+
+      <p>
+        The island is an ideal destination for travelers looking for
+        relaxation, nature, and adventure.
+      </p>
+
+      <h2>Beautiful Beaches of Koh Rong</h2>
+
+      <p>
+        Koh Rong features many beautiful beaches, including:
+      </p>
+
+      <ul>
+        <li><strong>Pagoda Beach</strong></li>
+        <li><strong>Coconut Beach</strong></li>
+        <li><strong>Palm Beach</strong></li>
+        <li><strong>Sok San Long Beach</strong></li>
+        <li><strong>Paradise Beach</strong></li>
+        <li><strong>Lonely Beach</strong></li>
+      </ul>
+
+      <p>
+        These beaches offer different experiences for visitors who want to
+        relax, explore the coastline, or enjoy the tropical surroundings of
+        Koh Rong.
+      </p>
+
+      <h2>Rainy Season Waterfalls and Streams</h2>
+
+      <p>
+        During the rainy season, Koh Rong becomes even greener and more
+        beautiful.
+      </p>
+
+      <p>
+        Waterfalls and fresh streams add another natural experience to the
+        island and make its jungle environment especially attractive during
+        this season.
+      </p>
+
+      <h2>Bioluminescent Plankton</h2>
+
+      <p>
+        At night, visitors may experience one of Koh Rong’s most magical
+        natural attractions:
+        <strong>bioluminescent plankton</strong>.
+      </p>
+
+      <p>
+        The glowing plankton can create a beautiful effect along the shore,
+        giving travelers a memorable nighttime experience.
+      </p>
+
+      <p>
+        From tropical beaches and jungle scenery to streams, waterfalls, and
+        glowing plankton, Koh Rong offers natural beauty throughout both the
+        day and night.
+      </p>
+    `,
+
+    thumbnail: "",
+
+    images: [],
+
+    videoUrl: "",
   },
 
-  {
-    title: "Koh Rong Snorkeling Guide for Beginners",
-
-    sub_title: "Everything You Need to Know Before Your First Snorkeling Trip",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt: "A beginner-friendly guide to snorkeling around Koh Rong.",
-
-    images: [
-      "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1551244072-5d12893278ab?auto=format&fit=crop&w=1400&q=85",
-    ],
-
-    text: "Snorkeling is a popular activity around Koh Rong. Beginners can join guided trips to suitable snorkeling locations. Bring swimwear, sunscreen, drinking water and a towel. Guided tours can also provide equipment and local information.",
-  },
+  /*
+  |--------------------------------------------------------------------------
+  | BLOG 3
+  |--------------------------------------------------------------------------
+  */
 
   {
-    title: "Why You Should Take a Sunset Boat Tour",
-
-    sub_title: "Experience a Relaxing Evening on the Water",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
+    title: "Best Activities and Adventures to Experience on Koh Rong",
 
     excerpt:
-      "Enjoy Koh Rong from the water and experience a beautiful tropical sunset.",
+      "From boat trips and snorkeling to scooter rides, jungle trekking, kayaking, and fishing, Koh Rong offers activities for every type of traveler.",
 
-    images: [
-      "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1499403474843-04e72c14df8a?auto=format&fit=crop&w=1400&q=85",
-    ],
+    subTitle: "Discover exciting ways to explore Koh Rong by land and sea.",
 
-    text: "A sunset boat tour is a relaxing way to experience Koh Rong. Travelers can enjoy views of the coastline, spend time on the water and finish the day watching a beautiful sunset over the sea.",
-  },
+    content: `
+      <p>
+        Koh Rong offers a wide variety of activities for travelers who want
+        to explore the island, discover its coastline, and enjoy outdoor
+        adventures.
+      </p>
 
-  {
-    title: "How to Get Around Koh Rong",
+      <h2>Explore Koh Rong by Tuk Tuk or Scooter</h2>
 
-    sub_title: "A Simple Guide to Island Transportation",
+      <p>
+        <strong>Tuk Tuk and scooter rentals</strong> are convenient ways to
+        travel around Koh Rong and discover different areas of the island.
+      </p>
 
-    thumbnail:
-      "https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1400&q=85",
+      <p>
+        Visitors can use them to reach beaches, villages, local communities,
+        and other interesting places around Koh Rong.
+      </p>
 
-    excerpt:
-      "Learn about walking, scooters, tuk tuks and boats around Koh Rong.",
+      <h2>Boat Trips and Island Hopping</h2>
 
-    images: [
-      "https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1524591652733-73fa1ae7b5ee?auto=format&fit=crop&w=1400&q=85",
-    ],
+      <p>
+        <strong>Boat trips and island hopping</strong> are great ways to
+        experience Koh Rong from the water.
+      </p>
 
-    text: "Getting around Koh Rong depends on where you stay. Walking works well around nearby villages and beaches. Scooters provide more flexibility in accessible areas. Tuk tuks are convenient for longer trips, while some areas can be reached by boat.",
-  },
+      <p>
+        Travelers can discover different parts of the coastline and enjoy the
+        tropical surroundings of the island.
+      </p>
 
-  {
-    title: "What to Pack for Your Koh Rong Trip",
+      <h2>Snorkeling and Diving</h2>
 
-    sub_title: "Essential Items for a Comfortable Island Holiday",
+      <p>
+        Koh Rong also offers opportunities for
+        <strong>snorkeling and diving</strong>.
+      </p>
 
-    thumbnail:
-      "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=85",
+      <p>
+        These activities allow travelers to explore the waters around the
+        island and enjoy another side of Koh Rong’s natural environment.
+      </p>
 
-    excerpt:
-      "Prepare useful items for beaches, boat trips and island adventures.",
+      <h2>Kayaking</h2>
 
-    images: [
-      "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-    ],
+      <p>
+        <strong>Kayaking</strong> gives visitors another way to explore the
+        coastal areas while enjoying the peaceful surroundings of the island.
+      </p>
 
-    text: "Traveling around an island is easier when you pack light. Useful items include swimwear, lightweight clothing, sunscreen, sunglasses, a hat, comfortable footwear, a reusable water bottle, dry bag and portable charger.",
-  },
+      <h2>Jungle Trekking</h2>
 
-  {
-    title: "A Local Village Experience on Koh Rong",
+      <p>
+        Travelers who enjoy land-based adventures can experience
+        <strong>jungle trekking</strong> through Koh Rong’s lush natural
+        environment.
+      </p>
 
-    sub_title: "Discover Local Culture and Everyday Island Life",
+      <p>
+        Trekking provides a different view of the island beyond its beaches
+        and coastal areas.
+      </p>
 
-    thumbnail:
-      "https://images.unsplash.com/photo-1552465011-b4e21bf6e79a?auto=format&fit=crop&w=1400&q=85",
+      <h2>Fishing Tours</h2>
 
-    excerpt:
-      "Discover local communities and another side of island life on Koh Rong.",
+      <p>
+        <strong>Fishing tours</strong> are another experience available on
+        Koh Rong and are closely connected with traditional island life.
+      </p>
 
-    images: [
-      "https://images.unsplash.com/photo-1552465011-b4e21bf6e79a?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1528181304800-259b08848526?auto=format&fit=crop&w=1400&q=85",
-    ],
+      <p>
+        With its natural beauty, cultural richness, and eco-tourism potential,
+        Koh Rong offers a strong combination of adventure, relaxation, and
+        sustainable travel experiences.
+      </p>
+    `,
 
-    text: "Koh Rong is more than beaches and resorts. Local communities live and work on the island throughout the year. Visiting villages gives travelers another perspective on island life, culture and local businesses.",
-  },
+    thumbnail: "",
 
-  {
-    title: "Best Time to Visit Koh Rong",
+    images: [],
 
-    sub_title: "Plan Your Island Holiday Around the Weather",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Learn what weather conditions to consider when planning your Koh Rong holiday.",
-
-    images: [
-      "https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85",
-    ],
-
-    text: "Weather can affect beaches, snorkeling, boat trips and transportation around Koh Rong. Clear days are ideal for outdoor activities. Travelers should keep their itinerary flexible and check local conditions before activities.",
-  },
-
-  {
-    title: "Koh Rong Travel Tips for First-Time Visitors",
-
-    sub_title: "Useful Advice for Your First Trip to the Island",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1526772662000-3f88f10405ff?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "Useful advice for transportation, payments and activities on your first visit.",
-
-    images: [
-      "https://images.unsplash.com/photo-1526772662000-3f88f10405ff?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-    ],
-
-    text: "First-time visitors should confirm their ferry departure, destination pier and accommodation before traveling. Keeping some cash can be useful for smaller businesses. Popular tours may also be easier to book in advance.",
-  },
-
-  {
-    title: "Plan the Perfect 3-Day Koh Rong Itinerary",
-
-    sub_title: "A Simple Three-Day Plan for Exploring Koh Rong",
-
-    thumbnail:
-      "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-
-    excerpt:
-      "A simple three-day itinerary combining beaches, tours and local experiences.",
-
-    images: [
-      "https://images.unsplash.com/photo-1530789253388-582c481c54b0?auto=format&fit=crop&w=1400&q=85",
-      "https://images.unsplash.com/photo-1540202404-a2f29016b523?auto=format&fit=crop&w=1400&q=85",
-    ],
-
-    text: "Day one can be spent arriving and relaxing at the beach. On day two, join a boat or snorkeling activity and enjoy the sunset. On day three, explore another part of Koh Rong, visit a local village or relax before departure.",
+    videoUrl: "",
   },
 ];
 
 /*
 |--------------------------------------------------------------------------
-| SEED
+| FIND ADMIN
+|--------------------------------------------------------------------------
+*/
+
+async function findAdmin() {
+  const admin = await User.findOne({
+    role: {
+      $in: ["SUPER_ADMIN", "ADMIN"],
+    },
+  }).select("_id username email role");
+
+  if (!admin) {
+    console.log("⚠️ No SUPER_ADMIN or ADMIN user found.");
+
+    console.log("ℹ️ Blogs will be seeded without created_by / updated_by.");
+
+    return null;
+  }
+
+  console.log(
+    `✅ Blog author: ${
+      admin.username || admin.email || admin._id
+    } (${admin.role})`,
+  );
+
+  return admin;
+}
+
+/*
+|--------------------------------------------------------------------------
+| BUILD BLOG PAYLOAD
+|--------------------------------------------------------------------------
+*/
+
+function buildBlogPayload(blog, adminId, isNew = false) {
+  const payload = {};
+
+  /*
+  |--------------------------------------------------------------------------
+  | TITLE
+  |--------------------------------------------------------------------------
+  */
+
+  payload.title = blog.title;
+
+  /*
+  |--------------------------------------------------------------------------
+  | SLUG
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("slug")) {
+    payload.slug = makeSlug(blog.title);
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | STATUS
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("status")) {
+    payload.status = getPublishedStatus();
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | EXCERPT / DESCRIPTION / SUMMARY
+  |--------------------------------------------------------------------------
+  */
+
+  const excerptField = getExcerptField();
+
+  if (excerptField) {
+    payload[excerptField] = blog.excerpt;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | TOP-LEVEL CONTENT
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("content")) {
+    payload.content = cleanHtml(blog.content);
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | POST DETAIL
+  |--------------------------------------------------------------------------
+  |
+  | Your current Blog model uses post_detail.
+  |
+  */
+
+  if (hasPath("post_detail")) {
+    payload.post_detail = [
+      {
+        sub_title: blog.subTitle || blog.title,
+
+        text: cleanHtml(blog.content),
+
+        images:
+          Array.isArray(blog.images) && blog.images.length
+            ? blog.images
+            : blog.thumbnail
+              ? [blog.thumbnail]
+              : [],
+
+        video_url: blog.videoUrl || "",
+      },
+    ];
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | COVER
+  |--------------------------------------------------------------------------
+  */
+
+  const coverField = getCoverField();
+
+  if (coverField) {
+    payload[coverField] = blog.thumbnail || "";
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | IMAGES
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("images")) {
+    payload.images = Array.isArray(blog.images) ? blog.images : [];
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | VIDEO
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("video_url")) {
+    payload.video_url = blog.videoUrl || "";
+  }
+
+  if (hasPath("video")) {
+    payload.video = blog.videoUrl || "";
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | AUTHOR
+  |--------------------------------------------------------------------------
+  */
+
+  if (adminId && hasPath("updated_by")) {
+    payload.updated_by = adminId;
+  }
+
+  if (isNew && adminId && hasPath("created_by")) {
+    payload.created_by = adminId;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | TIMESTAMPS
+  |--------------------------------------------------------------------------
+  */
+
+  if (hasPath("updated_at")) {
+    payload.updated_at = new Date();
+  }
+
+  if (isNew && hasPath("created_at")) {
+    payload.created_at = new Date();
+  }
+
+  return payload;
+}
+
+/*
+|--------------------------------------------------------------------------
+| CREATE OR UPDATE BLOG
+|--------------------------------------------------------------------------
+*/
+
+async function createOrUpdateBlog(blog, adminId) {
+  const slug = makeSlug(blog.title);
+
+  /*
+  |--------------------------------------------------------------------------
+  | SEARCH
+  |--------------------------------------------------------------------------
+  */
+
+  let existingBlog = null;
+
+  if (hasPath("slug")) {
+    existingBlog = await Blog.findOne({
+      $or: [
+        {
+          slug,
+        },
+
+        {
+          title: blog.title,
+        },
+      ],
+    });
+  } else {
+    existingBlog = await Blog.findOne({
+      title: blog.title,
+    });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | UPDATE
+  |--------------------------------------------------------------------------
+  */
+
+  if (existingBlog) {
+    const payload = buildBlogPayload(blog, adminId, false);
+
+    await Blog.updateOne(
+      {
+        _id: existingBlog._id,
+      },
+
+      {
+        $set: payload,
+      },
+
+      {
+        runValidators: true,
+      },
+    );
+
+    console.log(`🔄 Updated blog: ${blog.title}`);
+
+    return;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | CREATE
+  |--------------------------------------------------------------------------
+  */
+
+  const payload = buildBlogPayload(blog, adminId, true);
+
+  await Blog.create(payload);
+
+  console.log(`✅ Created blog: ${blog.title}`);
+}
+
+/*
+|--------------------------------------------------------------------------
+| SEED BLOGS
 |--------------------------------------------------------------------------
 */
 
@@ -254,64 +684,9 @@ async function seedBlogs() {
       autoIndex: false,
     });
 
+    console.log("");
     console.log("✅ MongoDB connected");
-
-    /*
-    |--------------------------------------------------------------------------
-    | RAW COLLECTIONS
-    |--------------------------------------------------------------------------
-    */
-
-    const blogs = mongoose.connection.collection("blogs");
-
-    const users = mongoose.connection.collection("users");
-
-    /*
-    |--------------------------------------------------------------------------
-    | SHOW INDEXES
-    |--------------------------------------------------------------------------
-    */
-
-    let indexes = await blogs.indexes();
-
-    console.log(
-      "📋 Blog indexes before cleanup:",
-      indexes.map((index) => index.name),
-    );
-
-    /*
-    |--------------------------------------------------------------------------
-    | DROP OLD SLUG INDEX
-    |--------------------------------------------------------------------------
-    |
-    | This is the index causing:
-    |
-    | E11000 slug: null
-    |
-    */
-
-    const slugIndex = indexes.find((index) => index.name === "slug_1");
-
-    if (slugIndex) {
-      await blogs.dropIndex("slug_1");
-
-      console.log("✅ Removed old blogs.slug_1 index");
-    } else {
-      console.log("✅ blogs.slug_1 index does not exist");
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | VERIFY INDEX REMOVAL
-    |--------------------------------------------------------------------------
-    */
-
-    indexes = await blogs.indexes();
-
-    console.log(
-      "📋 Blog indexes after cleanup:",
-      indexes.map((index) => index.name),
-    );
+    console.log("");
 
     /*
     |--------------------------------------------------------------------------
@@ -319,155 +694,23 @@ async function seedBlogs() {
     |--------------------------------------------------------------------------
     */
 
-    const admin = await users.findOne({
-      role: {
-        $in: ["SUPER_ADMIN", "ADMIN"],
-      },
-    });
+    const admin = await findAdmin();
 
     const adminId = admin?._id || null;
 
-    if (adminId) {
-      console.log(`✅ Admin found: ${adminId}`);
-    } else {
-      console.log("⚠️ No admin found");
-    }
-
     /*
     |--------------------------------------------------------------------------
-    | INSERT / UPDATE
+    | SEED
     |--------------------------------------------------------------------------
     */
 
-    let created = 0;
+    console.log("");
+    console.log("🌴 Seeding Explore Koh Rong blogs...");
+    console.log("");
 
-    let updated = 0;
-
-    for (const blog of blogSeedData) {
-      const now = new Date();
-
-      const slug = makeSlug(blog.title);
-
-      /*
-      |--------------------------------------------------------------------------
-      | ACTUAL BLOG DOCUMENT
-      |--------------------------------------------------------------------------
-      */
-
-      const document = {
-        title: blog.title,
-
-        slug,
-
-        thumbnail: blog.thumbnail,
-
-        excerpt: blog.excerpt,
-
-        description: blog.excerpt,
-
-        status: "ACTIVE",
-
-        post_detail: [
-          {
-            sub_title: blog.sub_title,
-
-            text: blog.text,
-
-            images: blog.images,
-
-            video_url: "",
-
-            _id: new mongoose.Types.ObjectId(),
-          },
-        ],
-
-        updated_at: now,
-
-        ...(adminId
-          ? {
-              updated_by: adminId,
-            }
-          : {}),
-      };
-
-      /*
-      |--------------------------------------------------------------------------
-      | FIND EXISTING BY TITLE
-      |--------------------------------------------------------------------------
-      */
-
-      const existing = await blogs.findOne({
-        title: blog.title,
-      });
-
-      /*
-      |--------------------------------------------------------------------------
-      | UPDATE
-      |--------------------------------------------------------------------------
-      */
-
-      if (existing) {
-        await blogs.updateOne(
-          {
-            _id: existing._id,
-          },
-          {
-            $set: document,
-          },
-        );
-
-        updated += 1;
-
-        console.log(`🔄 Updated: ${blog.title}`);
-
-        continue;
-      }
-
-      /*
-      |--------------------------------------------------------------------------
-      | CREATE
-      |--------------------------------------------------------------------------
-      */
-
-      await blogs.insertOne({
-        ...document,
-
-        created_at: now,
-
-        ...(adminId
-          ? {
-              created_by: adminId,
-            }
-          : {}),
-      });
-
-      created += 1;
-
-      console.log(`✅ Created: ${blog.title}`);
+    for (const blog of blogs) {
+      await createOrUpdateBlog(blog, adminId);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | VERIFY TEST DATA
-    |--------------------------------------------------------------------------
-    */
-
-    const titles = blogSeedData.map((blog) => blog.title);
-
-    const insertedBlogs = await blogs
-      .find({
-        title: {
-          $in: titles,
-        },
-      })
-      .project({
-        title: 1,
-        slug: 1,
-        status: 1,
-        thumbnail: 1,
-        post_detail: 1,
-      })
-      .toArray();
 
     /*
     |--------------------------------------------------------------------------
@@ -478,56 +721,39 @@ async function seedBlogs() {
     console.log("");
     console.log("==============================================");
 
-    console.log("🌴 BLOG SEED COMPLETE");
-
-    console.log(`✅ Created: ${created}`);
-
-    console.log(`🔄 Updated: ${updated}`);
-
-    console.log(`📚 Test blogs found: ${insertedBlogs.length}`);
+    console.log("🌴 Explore Koh Rong Blog Seed Complete");
 
     console.log("==============================================");
 
-    /*
-    |--------------------------------------------------------------------------
-    | PRINT TEST DATA
-    |--------------------------------------------------------------------------
-    */
+    console.log("");
 
-    insertedBlogs.forEach((blog) => {
-      console.log("");
-      console.log(`📝 ${blog.title}`);
+    console.log("1. Discover Koh Rong’s Local Villages and Island Culture");
 
-      console.log(`   slug: ${blog.slug}`);
+    console.log("2. Beautiful Beaches and Natural Wonders of Koh Rong");
 
-      console.log(`   status: ${blog.status}`);
+    console.log("3. Best Activities and Adventures to Experience on Koh Rong");
 
-      console.log(`   sections: ${blog.post_detail?.length || 0}`);
-    });
-
-    if (insertedBlogs.length === 10) {
-      console.log("");
-      console.log("🎉 SUCCESS: All 10 blogs were seeded.");
-    } else {
-      console.log("");
-      console.log(`⚠️ Expected 10 blogs but found ${insertedBlogs.length}.`);
-    }
+    console.log("");
   } catch (error) {
     console.error("");
-    console.error("❌ BLOG SEED ERROR:", error);
 
-    if (error?.code === 11000) {
-      console.error("Duplicate key:", error.keyValue);
+    console.error("❌ BLOG SEED ERROR");
 
-      console.error("Index:", error.keyPattern);
-    }
+    console.error(error);
+
+    console.error("");
 
     process.exitCode = 1;
   } finally {
+    /*
+    |--------------------------------------------------------------------------
+    | DISCONNECT
+    |--------------------------------------------------------------------------
+    */
+
     await mongoose.disconnect();
 
-    console.log("");
-    console.log("MongoDB disconnected");
+    console.log("🔌 MongoDB disconnected");
   }
 }
 
