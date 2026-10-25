@@ -2,12 +2,15 @@ import "dotenv/config";
 import nodemailer from "nodemailer";
 
 const SMTP_USER = String(process.env.SMTP_USER || "").trim();
-const SMTP_APP_PASSWORD = String(process.env.SMTP_APP_PASSWORD || "").replace(/\s/g, "").trim();
-const BUSINESS_EMAIL = String(process.env.BOOKING_NOTIFICATION_EMAIL || SMTP_USER || "").trim();
+const SMTP_APP_PASSWORD = String(process.env.SMTP_APP_PASSWORD || "")
+  .replace(/\s/g, "")
+  .trim();
+const BUSINESS_EMAIL = String(
+  process.env.BOOKING_NOTIFICATION_EMAIL || SMTP_USER || "",
+).trim();
 const FROM_NAME = String(process.env.SMTP_FROM_NAME || "Explore Koh Rong").trim();
 
 let transporter;
-
 function mailer() {
   if (!SMTP_USER || !SMTP_APP_PASSWORD) {
     throw new Error("SMTP_USER or SMTP_APP_PASSWORD is missing from backend/.env");
@@ -16,6 +19,10 @@ function mailer() {
     transporter = nodemailer.createTransport({
       service: "gmail",
       auth: { user: SMTP_USER, pass: SMTP_APP_PASSWORD },
+      // Bound connection times so a blocked SMTP port does not hang forever.
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
   }
   return transporter;
@@ -24,7 +31,6 @@ function mailer() {
 function fromAddress() {
   return { name: FROM_NAME, address: SMTP_USER };
 }
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -47,13 +53,11 @@ function descriptionOf(booking) {
     ? booking.description
     : {};
 }
-
 function customerOf(booking) {
   return booking?.customer_id && typeof booking.customer_id === "object"
     ? booking.customer_id
     : {};
 }
-
 function bookingData(booking) {
   const d = descriptionOf(booking);
   const c = customerOf(booking);
@@ -65,7 +69,6 @@ function bookingData(booking) {
     `${String(c.firstName || "").trim()} ${String(c.lastName || "").trim()}`.trim() ||
     c.displayName || c.username || "Customer";
   const paymentMethod = String(booking?.payment_method || booking?.paid_type || "CASH").toUpperCase();
-
   return {
     ref: getBookingReference(booking),
     service: serviceNames.join(", ") || d.service_name || "Service",
@@ -83,7 +86,6 @@ function bookingData(booking) {
     customerPhone: String(c.phone || "").trim(),
   };
 }
-
 function emailLayout(title, innerHtml) {
   return `<!doctype html><html><body style="margin:0;padding:22px;background:#f5f8fb;font-family:Arial,sans-serif;color:#173043">
   <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e6edf3;border-radius:12px;overflow:hidden">
@@ -92,11 +94,9 @@ function emailLayout(title, innerHtml) {
     <div style="padding:14px 26px;background:#f7fbfd;color:#667788;font-size:12px">Explore Koh Rong</div>
   </div></body></html>`;
 }
-
 function detailRow(label, value) {
   return `<tr><td style="padding:8px 12px 8px 0;color:#64748b;vertical-align:top">${escapeHtml(label)}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`;
 }
-
 function bookingTable(d) {
   return `<table style="border-collapse:collapse;width:100%;font-size:14px">
     ${detailRow("Reference", d.ref)}
@@ -108,13 +108,11 @@ function bookingTable(d) {
     ${detailRow("Total", `$${d.total}`)}
   </table>`;
 }
-
 export async function verifyEmailTransport() {
   await mailer().verify();
   console.log("✅ Gmail SMTP connection verified");
   return true;
 }
-
 export async function sendTestEmail() {
   if (!BUSINESS_EMAIL) throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
   return mailer().sendMail({
@@ -125,7 +123,6 @@ export async function sendTestEmail() {
     html: emailLayout("Local Email Test", "<p>Gmail SMTP is working correctly.</p>"),
   });
 }
-
 export async function sendBusinessBookingEmail(booking) {
   if (!BUSINESS_EMAIL) throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
   const d = bookingData(booking);
@@ -164,7 +161,6 @@ export async function sendBusinessBookingEmail(booking) {
   console.log("✅ Business booking email sent:", d.ref, result.messageId);
   return result;
 }
-
 export async function sendCustomerBookingEmail(booking) {
   const d = bookingData(booking);
   if (!d.customerEmail) return { skipped: true, reason: "Customer email is missing." };
@@ -195,7 +191,6 @@ export async function sendCustomerBookingEmail(booking) {
   console.log("✅ Customer booking email sent:", d.ref, result.messageId);
   return result;
 }
-
 export async function sendBookingEmails(booking) {
   const result = {
     business: { status: "PENDING", message_id: "", sent_at: null, error: "" },
@@ -229,8 +224,7 @@ export async function sendBookingEmails(booking) {
   return result;
 }
 
-// Preserve the export consumed by passwordResetController.js. Supports object
-// and positional calls; check your existing controller if it uses other fields.
+// Preserve the export consumed by passwordResetController.js.
 export async function sendPasswordResetEmail(arg1, arg2 = "", arg3 = "") {
   const options = arg1 && typeof arg1 === "object" && !Array.isArray(arg1)
     ? {
