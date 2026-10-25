@@ -1,25 +1,34 @@
 import "dotenv/config";
 import nodemailer from "nodemailer";
 
+/**
+ * Email delivery providers:
+ * - EMAIL_PROVIDER=resend: Resend HTTPS API on port 443 (recommended for DigitalOcean)
+ * - EMAIL_PROVIDER=gmail: existing Gmail SMTP for local development
+ *
+ * Never expose API keys or SMTP credentials to the frontend.
+ */
+const EMAIL_PROVIDER = String(process.env.EMAIL_PROVIDER || "gmail")
+  .trim()
+  .toLowerCase();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const RESEND_FROM_EMAIL = String(process.env.RESEND_FROM_EMAIL || "").trim();
 const SMTP_USER = String(process.env.SMTP_USER || "").trim();
 const SMTP_APP_PASSWORD = String(process.env.SMTP_APP_PASSWORD || "")
   .replace(/\s/g, "")
   .trim();
-const BUSINESS_EMAIL = String(
-  process.env.BOOKING_NOTIFICATION_EMAIL || SMTP_USER || "",
-).trim();
+const BUSINESS_EMAIL = String(process.env.BOOKING_NOTIFICATION_EMAIL || "").trim();
 const FROM_NAME = String(process.env.SMTP_FROM_NAME || "Explore Koh Rong").trim();
 
 let transporter;
 function mailer() {
   if (!SMTP_USER || !SMTP_APP_PASSWORD) {
-    throw new Error("SMTP_USER or SMTP_APP_PASSWORD is missing from backend/.env");
+    throw new Error("SMTP_USER or SMTP_APP_PASSWORD is missing in the backend environment.");
   }
   if (!transporter) {
     transporter = nodemailer.createTransport({
       service: "gmail",
       auth: { user: SMTP_USER, pass: SMTP_APP_PASSWORD },
-      // Bound connection times so a blocked SMTP port does not hang forever.
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 15000,
@@ -28,9 +37,69 @@ function mailer() {
   return transporter;
 }
 
+function validateResendConfiguration() {
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is missing in the backend environment.");
+  }
+  if (!RESEND_FROM_EMAIL) {
+    throw new Error("RESEND_FROM_EMAIL is missing; use an address on your verified sending domain.");
+  }
+  if (typeof fetch !== "function") {
+    throw new Error("Node.js 18 or later is required for the Resend HTTP API.");
+  }
+}
+
 function fromAddress() {
   return { name: FROM_NAME, address: SMTP_USER };
 }
+
+async function resendSendMail({ to, subject, text, html, replyTo }) {
+  validateResendConfiguration();
+
+  const payload = {
+    from: `${FROM_NAME} <${RESEND_FROM_EMAIL}>`,
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    text,
+    html,
+  };
+  if (replyTo) payload.reply_to = replyTo;
+
+  let response;
+  try {
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+        "User-Agent": "explore-kohrong-booking/1.0",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch (error) {
+    throw new Error(`Resend network error: ${error.message || String(error)}`);
+  }
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body?.id) {
+    const detail = body?.message || body?.error?.message || response.statusText || "Unknown API error";
+    throw new Error(`Resend API ${response.status}: ${detail}`);
+  }
+  // Match Nodemailer's result shape so existing booking code works unchanged.
+  return { messageId: body.id, provider: "resend" };
+}
+
+async function sendMail(options) {
+  if (EMAIL_PROVIDER === "resend") {
+    return resendSendMail(options);
+  }
+  if (EMAIL_PROVIDER === "gmail") {
+    return mailer().sendMail({ from: fromAddress(), ...options });
+  }
+  throw new Error(`Unsupported EMAIL_PROVIDER: ${EMAIL_PROVIDER}`);
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -109,18 +178,22 @@ function bookingTable(d) {
   </table>`;
 }
 export async function verifyEmailTransport() {
+  if (EMAIL_PROVIDER === "resend") {
+    validateResendConfiguration();
+    console.log("Resend settings present. Use sendTestEmail() to verify actual delivery.");
+    return true;
+  }
   await mailer().verify();
-  console.log("✅ Gmail SMTP connection verified");
+  console.log("Gmail SMTP connection verified");
   return true;
 }
 export async function sendTestEmail() {
   if (!BUSINESS_EMAIL) throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
-  return mailer().sendMail({
-    from: fromAddress(),
+  return sendMail({
     to: BUSINESS_EMAIL,
-    subject: "Explore Koh Rong - Local Email Test",
-    text: "Explore Koh Rong Gmail SMTP is working.",
-    html: emailLayout("Local Email Test", "<p>Gmail SMTP is working correctly.</p>"),
+    subject: "Explore Koh Rong - Email Delivery Test",
+    text: "Explore Koh Rong email delivery test.",
+    html: emailLayout("Email Delivery Test", "<p>Email delivery test from Explore Koh Rong.</p>"),
   });
 }
 export async function sendBusinessBookingEmail(booking) {
@@ -151,8 +224,7 @@ export async function sendBusinessBookingEmail(booking) {
     <h3>Special Request</h3><p>${escapeHtml(d.note || "-")}</p>
     <p><b>Status: PENDING</b></p>`,
   );
-  const result = await mailer().sendMail({
-    from: fromAddress(),
+  const result = await sendMail({
     to: BUSINESS_EMAIL,
     subject: `${d.ref} - New Booking - ${d.service}`,
     text,
@@ -181,8 +253,7 @@ export async function sendCustomerBookingEmail(booking) {
      ${bookingTable(d)}<p><b>Status: PENDING</b></p>
      <p>We will contact you after reviewing your booking.</p>`,
   );
-  const result = await mailer().sendMail({
-    from: fromAddress(),
+  const result = await sendMail({
     to: d.customerEmail,
     subject: `Booking Received - ${d.ref}`,
     text,
@@ -245,8 +316,7 @@ export async function sendPasswordResetEmail(arg1, arg2 = "", arg3 = "") {
     <p><a href="${escapeHtml(resetUrl)}" style="color:#238cc6">${escapeHtml(resetUrl)}</a></p>
     <p>If you did not request this, you can ignore the message.</p>`,
   );
-  return mailer().sendMail({
-    from: fromAddress(),
+  return sendMail({
     to: email,
     subject: "Reset Your Password - Explore Koh Rong",
     text,
