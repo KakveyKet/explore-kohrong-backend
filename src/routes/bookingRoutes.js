@@ -1,14 +1,13 @@
 import express from "express";
 
 import {
+  acceptBooking,
+  createBooking,
+  getBooking,
   getBookings,
   getMyBookings,
-  getBookingById,
-  createBooking,
-  updateBooking,
-  acceptBooking,
   rejectBooking,
-  deleteBooking,
+  resendBookingEmail,
 } from "../controllers/bookingController.js";
 
 import { authenticate, allowRoles } from "../middleware/auth.js";
@@ -17,55 +16,78 @@ const router = express.Router();
 
 /*
 |--------------------------------------------------------------------------
-| CUSTOMER
+| CREATE BOOKING
 |--------------------------------------------------------------------------
 */
-
-router.get("/mine", authenticate, getMyBookings);
 
 router.post("/", authenticate, createBooking);
 
 /*
 |--------------------------------------------------------------------------
-| ADMIN
+| MY BOOKINGS
+|--------------------------------------------------------------------------
+*/
+
+router.get("/mine", authenticate, getMyBookings);
+
+/*
+|--------------------------------------------------------------------------
+| ADMIN BOOKINGS
 |--------------------------------------------------------------------------
 */
 
 router.get(
   "/",
   authenticate,
-  allowRoles("ADMIN", "SUPER_ADMIN", "STAFF"),
+  allowRoles("SUPER_ADMIN", "ADMIN", "STAFF"),
   getBookings,
 );
 
-router.get("/:id", authenticate, getBookingById);
+/*
+|--------------------------------------------------------------------------
+| RESEND EMAIL
+|--------------------------------------------------------------------------
+*/
 
-router.patch(
-  "/:id",
+router.post(
+  "/:id/resend-email",
   authenticate,
-  allowRoles("ADMIN", "SUPER_ADMIN", "STAFF"),
-  updateBooking,
+  allowRoles("SUPER_ADMIN", "ADMIN", "STAFF"),
+  resendBookingEmail,
 );
+
+/*
+|--------------------------------------------------------------------------
+| ACCEPT
+|--------------------------------------------------------------------------
+*/
 
 router.patch(
   "/:id/accept",
   authenticate,
-  allowRoles("ADMIN", "SUPER_ADMIN", "STAFF"),
+  allowRoles("SUPER_ADMIN", "ADMIN", "STAFF"),
   acceptBooking,
 );
+
+/*
+|--------------------------------------------------------------------------
+| REJECT
+|--------------------------------------------------------------------------
+*/
 
 router.patch(
   "/:id/reject",
   authenticate,
-  allowRoles("ADMIN", "SUPER_ADMIN", "STAFF"),
+  allowRoles("SUPER_ADMIN", "ADMIN", "STAFF"),
   rejectBooking,
 );
 
-router.delete(
-  "/:id",
-  authenticate,
-  allowRoles("ADMIN", "SUPER_ADMIN"),
-  deleteBooking,
-);
+/*
+|--------------------------------------------------------------------------
+| DETAIL
+|--------------------------------------------------------------------------
+*/
+
+router.get("/:id", authenticate, getBooking);
 
 export default router;
