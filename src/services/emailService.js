@@ -1,104 +1,133 @@
 import "dotenv/config";
 import nodemailer from "nodemailer";
 
-/**
- * Email delivery providers:
- * - EMAIL_PROVIDER=resend: Resend HTTPS API on port 443 (recommended for DigitalOcean)
- * - EMAIL_PROVIDER=gmail: existing Gmail SMTP for local development
- *
- * Never expose API keys or SMTP credentials to the frontend.
- */
-const EMAIL_PROVIDER = String(process.env.EMAIL_PROVIDER || "gmail")
-  .trim()
-  .toLowerCase();
-const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
-const RESEND_FROM_EMAIL = String(process.env.RESEND_FROM_EMAIL || "").trim();
+/*
+|--------------------------------------------------------------------------
+| GMAIL SMTP CONFIGURATION
+|--------------------------------------------------------------------------
+|
+| Same .env for local and production:
+|
+| SMTP_USER=explorekohrong@gmail.com
+| SMTP_APP_PASSWORD=your_google_app_password
+| SMTP_FROM_NAME=Explore Koh Rong
+| BOOKING_NOTIFICATION_EMAIL=explorekohrong@gmail.com
+|
+| No Resend.
+| No EMAIL_PROVIDER.
+| No OAuth.
+|
+*/
+
 const SMTP_USER = String(process.env.SMTP_USER || "").trim();
+
 const SMTP_APP_PASSWORD = String(process.env.SMTP_APP_PASSWORD || "")
   .replace(/\s/g, "")
   .trim();
-const BUSINESS_EMAIL = String(process.env.BOOKING_NOTIFICATION_EMAIL || "").trim();
-const FROM_NAME = String(process.env.SMTP_FROM_NAME || "Explore Koh Rong").trim();
 
-let transporter;
+const BUSINESS_EMAIL = String(
+  process.env.BOOKING_NOTIFICATION_EMAIL || "",
+).trim();
+
+const FROM_NAME = String(
+  process.env.SMTP_FROM_NAME || "Explore Koh Rong",
+).trim();
+
+/*
+|--------------------------------------------------------------------------
+| GMAIL TRANSPORTER
+|--------------------------------------------------------------------------
+*/
+
+let transporter = null;
+
 function mailer() {
   if (!SMTP_USER || !SMTP_APP_PASSWORD) {
-    throw new Error("SMTP_USER or SMTP_APP_PASSWORD is missing in the backend environment.");
+    throw new Error(
+      "SMTP_USER or SMTP_APP_PASSWORD is missing from backend/.env",
+    );
   }
+
   if (!transporter) {
     transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: SMTP_USER, pass: SMTP_APP_PASSWORD },
+      host: "smtp.gmail.com",
+
+      port: 587,
+
+      secure: false,
+
+      requireTLS: true,
+
+      auth: {
+        user: SMTP_USER,
+        pass: SMTP_APP_PASSWORD,
+      },
+
       connectionTimeout: 10000,
+
       greetingTimeout: 10000,
+
       socketTimeout: 15000,
+
+      tls: {
+        minVersion: "TLSv1.2",
+      },
     });
   }
+
   return transporter;
 }
 
-function validateResendConfiguration() {
-  if (!RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY is missing in the backend environment.");
-  }
-  if (!RESEND_FROM_EMAIL) {
-    throw new Error("RESEND_FROM_EMAIL is missing; use an address on your verified sending domain.");
-  }
-  if (typeof fetch !== "function") {
-    throw new Error("Node.js 18 or later is required for the Resend HTTP API.");
-  }
-}
+/*
+|--------------------------------------------------------------------------
+| SENDER ADDRESS
+|--------------------------------------------------------------------------
+*/
 
 function fromAddress() {
-  return { name: FROM_NAME, address: SMTP_USER };
-}
-
-async function resendSendMail({ to, subject, text, html, replyTo }) {
-  validateResendConfiguration();
-
-  const payload = {
-    from: `${FROM_NAME} <${RESEND_FROM_EMAIL}>`,
-    to: Array.isArray(to) ? to : [to],
-    subject,
-    text,
-    html,
+  return {
+    name: FROM_NAME,
+    address: SMTP_USER,
   };
-  if (replyTo) payload.reply_to = replyTo;
-
-  let response;
-  try {
-    response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-        "User-Agent": "explore-kohrong-booking/1.0",
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(12000),
-    });
-  } catch (error) {
-    throw new Error(`Resend network error: ${error.message || String(error)}`);
-  }
-
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body?.id) {
-    const detail = body?.message || body?.error?.message || response.statusText || "Unknown API error";
-    throw new Error(`Resend API ${response.status}: ${detail}`);
-  }
-  // Match Nodemailer's result shape so existing booking code works unchanged.
-  return { messageId: body.id, provider: "resend" };
 }
+
+/*
+|--------------------------------------------------------------------------
+| SEND EMAIL
+|--------------------------------------------------------------------------
+*/
 
 async function sendMail(options) {
-  if (EMAIL_PROVIDER === "resend") {
-    return resendSendMail(options);
+  const mailOptions = {
+    from: fromAddress(),
+    ...options,
+  };
+
+  try {
+    const result = await mailer().sendMail(mailOptions);
+
+    console.log("[EMAIL SENT]", {
+      messageId: result.messageId,
+      accepted: result.accepted,
+      rejected: result.rejected,
+    });
+
+    return result;
+  } catch (error) {
+    console.error("[EMAIL SEND FAILED]", {
+      code: error.code || "",
+      message: error.message || "Unknown error",
+    });
+
+    throw error;
   }
-  if (EMAIL_PROVIDER === "gmail") {
-    return mailer().sendMail({ from: fromAddress(), ...options });
-  }
-  throw new Error(`Unsupported EMAIL_PROVIDER: ${EMAIL_PROVIDER}`);
 }
+
+/*
+|--------------------------------------------------------------------------
+| HTML ESCAPE
+|--------------------------------------------------------------------------
+*/
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -109,166 +138,544 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-// The database-assigned number is canonical. Legacy records retain a stable fallback.
+/*
+|--------------------------------------------------------------------------
+| BOOKING REFERENCE
+|--------------------------------------------------------------------------
+|
+| New:
+| AD:001
+| AD:002
+| AD:003
+|
+| Old bookings retain MongoDB fallback.
+|
+*/
+
 export function getBookingReference(booking) {
   const number = String(booking?.booking_number || "").trim();
-  if (number) return number;
+
+  if (number) {
+    return number;
+  }
+
   const id = String(booking?._id || "").trim();
+
   return id ? `#${id.slice(-6)}` : "-";
 }
 
+/*
+|--------------------------------------------------------------------------
+| BOOKING DESCRIPTION
+|--------------------------------------------------------------------------
+*/
+
 function descriptionOf(booking) {
-  return booking?.description && typeof booking.description === "object"
-    ? booking.description
-    : {};
+  const description = booking?.description;
+
+  if (
+    description &&
+    typeof description === "object" &&
+    !Array.isArray(description)
+  ) {
+    return description;
+  }
+
+  return {};
 }
+
+/*
+|--------------------------------------------------------------------------
+| CUSTOMER
+|--------------------------------------------------------------------------
+*/
+
 function customerOf(booking) {
-  return booking?.customer_id && typeof booking.customer_id === "object"
-    ? booking.customer_id
-    : {};
+  const customer = booking?.customer_id;
+
+  if (customer && typeof customer === "object") {
+    return customer;
+  }
+
+  return {};
 }
+
+/*
+|--------------------------------------------------------------------------
+| BOOKING DATA
+|--------------------------------------------------------------------------
+*/
+
 function bookingData(booking) {
-  const d = descriptionOf(booking);
-  const c = customerOf(booking);
-  const services = Array.isArray(booking?.products_id) ? booking.products_id : [];
+  const description = descriptionOf(booking);
+
+  const customer = customerOf(booking);
+
+  const services = Array.isArray(booking?.products_id)
+    ? booking.products_id
+    : [];
+
   const serviceNames = services
     .filter((item) => item && typeof item === "object" && item.name)
     .map((item) => String(item.name));
+
+  const fullName = [customer.firstName, customer.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
   const customerName =
-    `${String(c.firstName || "").trim()} ${String(c.lastName || "").trim()}`.trim() ||
-    c.displayName || c.username || "Customer";
-  const paymentMethod = String(booking?.payment_method || booking?.paid_type || "CASH").toUpperCase();
+    fullName ||
+    customer.displayName ||
+    customer.username ||
+    description.customer_name ||
+    "Customer";
+
+  const paymentMethod = String(
+    booking?.payment_method || booking?.paid_type || "CASH",
+  ).toUpperCase();
+
+  const payment = ["BANK", "BANK_TRANSFER"].includes(paymentMethod)
+    ? "Bank Transfer"
+    : "Pay at Check-in";
+
   return {
     ref: getBookingReference(booking),
-    service: serviceNames.join(", ") || d.service_name || "Service",
-    date: String(d.booking_date || booking?.booking_date || "-"),
-    time: String(d.booking_time || booking?.booking_time || "-"),
-    guests: Number(d.people ?? booking?.people ?? 1),
-    payment: ["BANK", "BANK_TRANSFER"].includes(paymentMethod)
-      ? "Bank Transfer"
-      : "Pay at Check-in",
+
+    service: serviceNames.join(", ") || description.service_name || "Service",
+
+    date: String(description.booking_date || booking?.booking_date || "-"),
+
+    time: String(description.booking_time || booking?.booking_time || "-"),
+
+    guests: Number(description.people ?? booking?.people ?? 1),
+
+    payment,
+
     total: Number(booking?.total_price || 0).toFixed(2),
-    note: String(d.note || booking?.note || "-").trim(),
-    channel: String(d.booking_channel || "EMAIL").toUpperCase(),
+
+    note: String(description.note || booking?.note || "-").trim(),
+
+    channel: String(description.booking_channel || "EMAIL").toUpperCase(),
+
     customerName: String(customerName),
-    customerEmail: String(c.email || "").trim(),
-    customerPhone: String(c.phone || "").trim(),
+
+    customerEmail: String(
+      customer.email ||
+        description.customer_email ||
+        booking?.customer_email ||
+        "",
+    ).trim(),
+
+    customerPhone: String(
+      customer.phone ||
+        description.customer_phone ||
+        booking?.customer_phone ||
+        "",
+    ).trim(),
   };
 }
-function emailLayout(title, innerHtml) {
-  return `<!doctype html><html><body style="margin:0;padding:22px;background:#f5f8fb;font-family:Arial,sans-serif;color:#173043">
-  <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e6edf3;border-radius:12px;overflow:hidden">
-    <div style="background:#43b5e3;color:#fff;padding:22px 26px"><h2 style="margin:0">${escapeHtml(title)}</h2></div>
-    <div style="padding:26px;line-height:1.7">${innerHtml}</div>
-    <div style="padding:14px 26px;background:#f7fbfd;color:#667788;font-size:12px">Explore Koh Rong</div>
-  </div></body></html>`;
+
+/*
+|--------------------------------------------------------------------------
+| EMAIL HTML LAYOUT
+|--------------------------------------------------------------------------
+*/
+
+function emailLayout(title, content) {
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1"
+        />
+      </head>
+
+      <body
+        style="
+          margin:0;
+          padding:22px;
+          background:#f5f8fb;
+          font-family:Arial,sans-serif;
+          color:#173043;
+        "
+      >
+        <div
+          style="
+            max-width:640px;
+            margin:0 auto;
+            background:#ffffff;
+            border:1px solid #e6edf3;
+            border-radius:12px;
+            overflow:hidden;
+          "
+        >
+          <div
+            style="
+              background:#43b5e3;
+              color:#ffffff;
+              padding:22px 26px;
+            "
+          >
+            <h2 style="margin:0;">
+              ${escapeHtml(title)}
+            </h2>
+          </div>
+
+          <div
+            style="
+              padding:26px;
+              line-height:1.7;
+            "
+          >
+            ${content}
+          </div>
+
+          <div
+            style="
+              padding:14px 26px;
+              background:#f7fbfd;
+              color:#667788;
+              font-size:12px;
+            "
+          >
+            Explore Koh Rong
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
+
+/*
+|--------------------------------------------------------------------------
+| BOOKING DETAIL ROW
+|--------------------------------------------------------------------------
+*/
+
 function detailRow(label, value) {
-  return `<tr><td style="padding:8px 12px 8px 0;color:#64748b;vertical-align:top">${escapeHtml(label)}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`;
+  return `
+    <tr>
+      <td
+        style="
+          padding:8px 12px 8px 0;
+          color:#64748b;
+          vertical-align:top;
+        "
+      >
+        ${escapeHtml(label)}
+      </td>
+
+      <td
+        style="
+          padding:8px 0;
+          font-weight:600;
+        "
+      >
+        ${escapeHtml(value)}
+      </td>
+    </tr>
+  `;
 }
-function bookingTable(d) {
-  return `<table style="border-collapse:collapse;width:100%;font-size:14px">
-    ${detailRow("Reference", d.ref)}
-    ${detailRow("Service", d.service)}
-    ${detailRow("Date", d.date)}
-    ${detailRow("Time", d.time)}
-    ${detailRow("Guests", d.guests)}
-    ${detailRow("Payment", d.payment)}
-    ${detailRow("Total", `$${d.total}`)}
-  </table>`;
+
+/*
+|--------------------------------------------------------------------------
+| BOOKING SUMMARY TABLE
+|--------------------------------------------------------------------------
+*/
+
+function bookingTable(data) {
+  return `
+    <table
+      style="
+        border-collapse:collapse;
+        width:100%;
+        font-size:14px;
+      "
+    >
+      ${detailRow("Invoice Number", data.ref)}
+      ${detailRow("Service", data.service)}
+      ${detailRow("Date", data.date)}
+      ${detailRow("Time", data.time)}
+      ${detailRow("Guests", data.guests)}
+      ${detailRow("Payment", data.payment)}
+      ${detailRow("Total", `$${data.total}`)}
+    </table>
+  `;
 }
+
+/*
+|--------------------------------------------------------------------------
+| VERIFY GMAIL CONNECTION
+|--------------------------------------------------------------------------
+*/
+
 export async function verifyEmailTransport() {
-  if (EMAIL_PROVIDER === "resend") {
-    validateResendConfiguration();
-    console.log("Resend settings present. Use sendTestEmail() to verify actual delivery.");
+  try {
+    await mailer().verify();
+
+    console.log("[SMTP] Gmail connection verified successfully.");
+
     return true;
+  } catch (error) {
+    console.error("[SMTP VERIFICATION FAILED]", error.message);
+
+    throw error;
   }
-  await mailer().verify();
-  console.log("Gmail SMTP connection verified");
-  return true;
 }
+
+/*
+|--------------------------------------------------------------------------
+| SEND TEST EMAIL
+|--------------------------------------------------------------------------
+*/
+
 export async function sendTestEmail() {
-  if (!BUSINESS_EMAIL) throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
+  if (!BUSINESS_EMAIL) {
+    throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
+  }
+
   return sendMail({
     to: BUSINESS_EMAIL,
+
     subject: "Explore Koh Rong - Email Delivery Test",
+
     text: "Explore Koh Rong email delivery test.",
-    html: emailLayout("Email Delivery Test", "<p>Email delivery test from Explore Koh Rong.</p>"),
+
+    html: emailLayout(
+      "Email Delivery Test",
+      `
+        <h3>Gmail Test Successful</h3>
+
+        <p>
+          This is a test email from
+          Explore Koh Rong.
+        </p>
+
+        <p>
+          Your email sending service is working.
+        </p>
+      `,
+    ),
   });
 }
+
+/*
+|--------------------------------------------------------------------------
+| BUSINESS BOOKING EMAIL
+|--------------------------------------------------------------------------
+*/
+
 export async function sendBusinessBookingEmail(booking) {
-  if (!BUSINESS_EMAIL) throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
-  const d = bookingData(booking);
+  if (!BUSINESS_EMAIL) {
+    throw new Error("BOOKING_NOTIFICATION_EMAIL is missing.");
+  }
+
+  const data = bookingData(booking);
+
   const text = [
-    `New booking: ${d.ref}`,
-    `Service: ${d.service}`,
-    `Date: ${d.date}`,
-    `Time: ${d.time}`,
-    `Guests: ${d.guests}`,
-    `Payment: ${d.payment}`,
-    `Total: $${d.total}`,
-    `Customer: ${d.customerName}`,
-    `Email: ${d.customerEmail || "-"}`,
-    `Phone: ${d.customerPhone || "-"}`,
-    `Preferred contact: ${d.channel}`,
-    `Note: ${d.note || "-"}`,
+    `New Booking: ${data.ref}`,
+    "",
+    `Service: ${data.service}`,
+    `Date: ${data.date}`,
+    `Time: ${data.time}`,
+    `Guests: ${data.guests}`,
+    `Payment: ${data.payment}`,
+    `Total: $${data.total}`,
+    "",
+    `Customer: ${data.customerName}`,
+    `Email: ${data.customerEmail || "-"}`,
+    `Phone: ${data.customerPhone || "-"}`,
+    "",
+    `Preferred Contact: ${data.channel}`,
+    `Special Request: ${data.note}`,
+    "",
     "Status: PENDING",
   ].join("\n");
+
   const html = emailLayout(
-    `New Booking — ${d.ref}`,
-    `${bookingTable(d)}<hr style="border:0;border-top:1px solid #e2e8f0;margin:20px 0"/>
-    <h3>Customer</h3><p><b>Name:</b> ${escapeHtml(d.customerName)}<br/>
-    <b>Email:</b> ${escapeHtml(d.customerEmail || "-")}<br/>
-    <b>Phone:</b> ${escapeHtml(d.customerPhone || "-")}<br/>
-    <b>Preferred contact:</b> ${escapeHtml(d.channel)}</p>
-    <h3>Special Request</h3><p>${escapeHtml(d.note || "-")}</p>
-    <p><b>Status: PENDING</b></p>`,
+    `New Booking — ${data.ref}`,
+    `
+      <p>
+        A new booking has been submitted
+        to Explore Koh Rong.
+      </p>
+
+      ${bookingTable(data)}
+
+      <hr
+        style="
+          border:0;
+          border-top:1px solid #e2e8f0;
+          margin:20px 0;
+        "
+      />
+
+      <h3>Customer Information</h3>
+
+      <p>
+        <b>Name:</b>
+        ${escapeHtml(data.customerName)}
+        <br />
+
+        <b>Email:</b>
+        ${escapeHtml(data.customerEmail || "-")}
+        <br />
+
+        <b>Phone:</b>
+        ${escapeHtml(data.customerPhone || "-")}
+        <br />
+
+        <b>Contact Via:</b>
+        ${escapeHtml(data.channel)}
+      </p>
+
+      <h3>Special Request</h3>
+
+      <p>
+        ${escapeHtml(data.note || "-")}
+      </p>
+
+      <p>
+        <b>Status: PENDING</b>
+      </p>
+    `,
   );
+
   const result = await sendMail({
     to: BUSINESS_EMAIL,
-    subject: `${d.ref} - New Booking - ${d.service}`,
+
+    subject: `${data.ref} - New Booking - ${data.service}`,
+
     text,
+
     html,
   });
-  console.log("✅ Business booking email sent:", d.ref, result.messageId);
+
+  console.log("[BUSINESS EMAIL SENT]", data.ref, result.messageId);
+
   return result;
 }
+
+/*
+|--------------------------------------------------------------------------
+| CUSTOMER BOOKING EMAIL
+|--------------------------------------------------------------------------
+*/
+
 export async function sendCustomerBookingEmail(booking) {
-  const d = bookingData(booking);
-  if (!d.customerEmail) return { skipped: true, reason: "Customer email is missing." };
+  const data = bookingData(booking);
+
+  if (!data.customerEmail) {
+    return {
+      skipped: true,
+      reason: "Customer email is missing.",
+    };
+  }
+
   const text = [
-    `Hello ${d.customerName},`,
+    `Hello ${data.customerName},`,
+    "",
     "Thank you for booking with Explore Koh Rong.",
-    `Booking Reference: ${d.ref}`,
-    `Service: ${d.service}`,
-    `Date: ${d.date}`,
-    `Time: ${d.time}`,
-    `Guests: ${d.guests}`,
-    `Total: $${d.total}`,
-    "Status: PENDING — we will review your request.",
+    "",
+    `Invoice Number: ${data.ref}`,
+    `Service: ${data.service}`,
+    `Date: ${data.date}`,
+    `Time: ${data.time}`,
+    `Guests: ${data.guests}`,
+    `Total: $${data.total}`,
+    "",
+    "Status: PENDING",
+    "",
+    "We will review your booking request.",
   ].join("\n");
+
   const html = emailLayout(
-    `Booking Received — ${d.ref}`,
-    `<p>Hello <b>${escapeHtml(d.customerName)}</b>, thank you for booking with Explore Koh Rong.</p>
-     ${bookingTable(d)}<p><b>Status: PENDING</b></p>
-     <p>We will contact you after reviewing your booking.</p>`,
+    `Booking Received — ${data.ref}`,
+    `
+      <p>
+        Hello
+        <b>${escapeHtml(data.customerName)}</b>,
+      </p>
+
+      <p>
+        Thank you for choosing Explore Koh Rong.
+        We have received your booking request.
+      </p>
+
+      ${bookingTable(data)}
+
+      <p>
+        <b>Status: PENDING</b>
+      </p>
+
+      <p>
+        Our team will review your booking
+        and contact you after confirmation.
+      </p>
+
+      <p>
+        Thank you for choosing Explore Koh Rong.
+      </p>
+    `,
   );
+
   const result = await sendMail({
-    to: d.customerEmail,
-    subject: `Booking Received - ${d.ref}`,
+    to: data.customerEmail,
+
+    subject: `Booking Received - ${data.ref}`,
+
     text,
+
     html,
   });
-  console.log("✅ Customer booking email sent:", d.ref, result.messageId);
+
+  console.log("[CUSTOMER EMAIL SENT]", data.ref, result.messageId);
+
   return result;
 }
+
+/*
+|--------------------------------------------------------------------------
+| SEND BOTH BOOKING EMAILS
+|--------------------------------------------------------------------------
+|
+| Send business and customer notifications.
+|
+| Failures are handled independently so one
+| email failure does not prevent the other.
+|
+*/
+
 export async function sendBookingEmails(booking) {
   const result = {
-    business: { status: "PENDING", message_id: "", sent_at: null, error: "" },
-    customer: { status: "PENDING", message_id: "", sent_at: null, error: "" },
+    business: {
+      status: "PENDING",
+      message_id: "",
+      sent_at: null,
+      error: "",
+    },
+
+    customer: {
+      status: "PENDING",
+      message_id: "",
+      sent_at: null,
+      error: "",
+    },
   };
+
+  /*
+  |--------------------------------------------------------------------------
+  | BUSINESS EMAIL
+  |--------------------------------------------------------------------------
+  */
+
   try {
     const message = await sendBusinessBookingEmail(booking);
+
     result.business = {
       status: "SENT",
       message_id: message.messageId || "",
@@ -276,50 +683,163 @@ export async function sendBookingEmails(booking) {
       error: "",
     };
   } catch (error) {
-    console.error("❌ Business booking email failed:", error);
+    console.error("[BUSINESS EMAIL FAILED]", error.message);
+
     result.business = {
-      status: "FAILED", message_id: "", sent_at: null, error: error.message || "Email failed.",
+      status: "FAILED",
+      message_id: "",
+      sent_at: null,
+      error: error.message || "Unable to send business email.",
     };
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | CUSTOMER EMAIL
+  |--------------------------------------------------------------------------
+  */
+
   try {
     const message = await sendCustomerBookingEmail(booking);
-    result.customer = message.skipped
-      ? { status: "SKIPPED", message_id: "", sent_at: null, error: message.reason }
-      : { status: "SENT", message_id: message.messageId || "", sent_at: new Date().toISOString(), error: "" };
+
+    if (message.skipped) {
+      result.customer = {
+        status: "SKIPPED",
+        message_id: "",
+        sent_at: null,
+        error: message.reason,
+      };
+    } else {
+      result.customer = {
+        status: "SENT",
+        message_id: message.messageId || "",
+        sent_at: new Date().toISOString(),
+        error: "",
+      };
+    }
   } catch (error) {
-    console.error("❌ Customer booking email failed:", error);
+    console.error("[CUSTOMER EMAIL FAILED]", error.message);
+
     result.customer = {
-      status: "FAILED", message_id: "", sent_at: null, error: error.message || "Email failed.",
+      status: "FAILED",
+      message_id: "",
+      sent_at: null,
+      error: error.message || "Unable to send customer email.",
     };
   }
+
   return result;
 }
 
-// Preserve the export consumed by passwordResetController.js.
+/*
+|--------------------------------------------------------------------------
+| PASSWORD RESET EMAIL
+|--------------------------------------------------------------------------
+|
+| Supports:
+|
+| sendPasswordResetEmail({
+|   email,
+|   resetUrl,
+|   name
+| })
+|
+| Also supports positional arguments:
+|
+| sendPasswordResetEmail(email, resetUrl, name)
+|
+*/
+
 export async function sendPasswordResetEmail(arg1, arg2 = "", arg3 = "") {
-  const options = arg1 && typeof arg1 === "object" && !Array.isArray(arg1)
-    ? {
-        email: arg1.email || arg1.to || arg1.recipient,
-        resetUrl: arg1.resetUrl || arg1.resetURL || arg1.url || arg1.link,
-        name: arg1.name || arg1.displayName || arg1.username || arg1.firstName || "Customer",
-      }
-    : { email: arg1, resetUrl: arg2, name: arg3 || "Customer" };
+  let options;
+
+  if (arg1 && typeof arg1 === "object" && !Array.isArray(arg1)) {
+    options = {
+      email: arg1.email || arg1.to || arg1.recipient,
+
+      resetUrl: arg1.resetUrl || arg1.resetURL || arg1.url || arg1.link,
+
+      name:
+        arg1.name ||
+        arg1.displayName ||
+        arg1.username ||
+        arg1.firstName ||
+        "Customer",
+    };
+  } else {
+    options = {
+      email: arg1,
+      resetUrl: arg2,
+      name: arg3 || "Customer",
+    };
+  }
+
   const email = String(options.email || "").trim();
+
   const resetUrl = String(options.resetUrl || "").trim();
+
   const name = String(options.name || "Customer").trim();
-  if (!email) throw new Error("Password reset email recipient is missing.");
-  if (!/^https?:\/\//i.test(resetUrl)) throw new Error("A valid password reset URL is required.");
-  const text = `Hello ${name},\n\nReset your Explore Koh Rong password: ${resetUrl}\n\nIf this was not you, ignore this message.`;
+
+  if (!email) {
+    throw new Error("Password reset email recipient is missing.");
+  }
+
+  if (!/^https?:\/\//i.test(resetUrl)) {
+    throw new Error("A valid password reset URL is required.");
+  }
+
+  const text = [
+    `Hello ${name},`,
+    "",
+    "We received a request to reset your password.",
+    "",
+    `Reset your password: ${resetUrl}`,
+    "",
+    "If you did not request this, ignore this email.",
+  ].join("\n");
+
   const html = emailLayout(
     "Reset Your Password",
-    `<p>Hello ${escapeHtml(name)},</p><p>Use this link to reset your password:</p>
-    <p><a href="${escapeHtml(resetUrl)}" style="color:#238cc6">${escapeHtml(resetUrl)}</a></p>
-    <p>If you did not request this, you can ignore the message.</p>`,
+    `
+      <p>
+        Hello ${escapeHtml(name)},
+      </p>
+
+      <p>
+        We received a request to reset
+        your Explore Koh Rong password.
+      </p>
+
+      <p>
+        <a
+          href="${escapeHtml(resetUrl)}"
+          style="
+            display:inline-block;
+            background:#43b5e3;
+            color:#ffffff;
+            padding:12px 22px;
+            text-decoration:none;
+            border-radius:8px;
+          "
+        >
+          Reset Password
+        </a>
+      </p>
+
+      <p>
+        If you did not request this,
+        you can safely ignore this email.
+      </p>
+    `,
   );
+
   return sendMail({
     to: email,
+
     subject: "Reset Your Password - Explore Koh Rong",
+
     text,
+
     html,
   });
 }
